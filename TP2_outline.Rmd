@@ -1,0 +1,409 @@
+# Practical 2 - Autocovariance, Autocorrelation, Distance Autocovariance and Distance Autocorrelation
+
+**Course:** Forecasting with Applications in Business (S411031)\
+**Semester:** Fall 2026
+
+```{r setup, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(energy)
+
+set.seed(123)
+
+manual_acf <- function(y) {
+  n <- length(y)
+  lags <- 0:(n - 1)
+  y_bar <- mean(y)
+  gamma_hat <- sapply(lags, function(h) {
+    sum((y[1:(n - h)] - y_bar) * (y[(h + 1):n] - y_bar)) / n
+  })
+  data.frame(lag = lags, autocovariance = gamma_hat,
+             autocorrelation = gamma_hat / gamma_hat[1])
+}
+
+empirical_dacf <- function(y) {
+  n <- length(y)
+  sapply(0:(n - 1), function(h) dcor(y[1:(n - h)], y[(h + 1):n]))
+}
+
+dcor_gaussian <- function(rho) {
+  dcor_squared <- (
+    rho * asin(rho) + sqrt(1 - rho^2) - rho * asin(rho / 2) -
+      sqrt(4 - rho^2) + 1
+  ) / (1 + pi / 3 - sqrt(3))
+  sqrt(pmax(dcor_squared, 0))
+}
+
+plot_series <- function(y, title) {
+  ggplot(data.frame(time = seq_along(y), value = y), aes(time, value)) +
+    geom_line(colour = "#2C7FB8", linewidth = 0.4) +
+    geom_hline(yintercept = 0, linetype = "dashed", colour = "red") +
+    labs(title = title, x = "Time", y = expression(Y[t])) +
+    theme_minimal()
+}
+
+plot_comparison <- function(data, empirical, theoretical, y_label, title) {
+  ggplot(data, aes(x = lag)) +
+    geom_segment(aes(xend = lag, y = 0, yend = .data[[empirical]]),
+                 colour = "#2C7FB8") +
+    geom_point(aes(y = .data[[theoretical]]), colour = "#D7301F", size = 2) +
+    labs(title = title, x = "Lag", y = y_label) +
+    theme_minimal()
+}
+```
+
+------------------------------------------------------------------------
+
+## Exercise 1
+
+> Note that Theorem 7 in Székely, Rizzo, and Bakirov (2007) implies that whenever $\rho = 0$, also $\mathcal{R}(X,Y) = 0$. However, in the lecture we discussed that the reason to use $\mathcal{R}(X,Y)$ is that it can be larger than zero even if $\rho = 0$, and can therefore detect dependencies that $\rho$ misses. How do we solve this contradiction?
+
+### Answer
+
+Theorem 7 applies when $X$ and $Y$ are jointly Gaussian. In this case, zero correlation implies independence, so distance correlation is also zero. For general random variables, zero correlation does not imply independence; distance correlation can therefore be positive when ordinary correlation is zero.
+
+### Mathematical example
+
+Theorem 7:
+
+if $X$ and $Y$ are standard normal, with correlation $\rho = \rho(X, Y)$ then:
+
+1.  $\mathcal{R}(X,Y) \leq |\rho|$
+2.  $\mathcal{R}^2(X,Y)=\frac{\rho \arcsin(\rho)+ \sqrt{1-\rho^2}- \frac{\rho \arcsin(\rho)}{2}- \sqrt{4-\rho^2}+ 1}{1 + \pi/3 - \sqrt{3}}.$
+
+for *theorem 7* to hold $X$ and $Y$ must be jointly Gaussian.
+
+meaning that:
+$$\begin{pmatrix} X \\ Y \end{pmatrix}
+\sim
+\mathcal{N}\left(
+\begin{pmatrix} 0 \\ 0 \end{pmatrix},
+\begin{pmatrix} 1 & \rho \\ \rho & 1 \end{pmatrix}
+\right)$$
+
+now let's set that $Y=X^2$. Notice that $Y$ is not normally distributed, so $X$ and $Y$ are not jointly Gaussian.
+
+we can calculate $Cov(X,Y)$:
+$$Cov(X,Y)=\mathbb{E}[(X-\mathbb{E}[X])(Y-\mathbb{E}[Y])]$$
+
+substitute for $Y=X^2$:
+$$\Leftrightarrow Cov(X,Y)=\mathbb{E}[(X-\mathbb{E}[X])(X^2-\mathbb{E}[X^2])]$$
+
+since $X \sim \mathcal{N}(0,1)$, we know $\mathbb{E}[X]=0$, $\mathbb{E}[X^2]=1$, and $\mathbb{E}[X^3]=0$:
+$$\Leftrightarrow Cov(X,Y)=\mathbb{E}[(X-0)(X^2-1)]$$
+
+compute:
+$$\Leftrightarrow Cov(X,Y)=\mathbb{E}[X^3-X]$$
+
+separate expectations:
+$$\Leftrightarrow Cov(X,Y)=\mathbb{E}[X^3]-\mathbb{E}[X]$$
+
+take expectations:
+$$\Leftrightarrow Cov(X,Y)=0-0=0$$
+
+$$\rho(X,Y)=\frac{\gamma(X,Y)}{\sqrt{\gamma(X,X)\gamma(Y,Y)}}$$
+
+where $\gamma(X,Y)=Cov(X,Y)$.
+
+we can conclude that:
+$$\rho(X,Y)=0$$
+
+However, $Y=X^2$ is fully determined by $X$, so $X$ and $Y$ are dependent. Theorem 7 does not apply because $X$ and $Y$ are not jointly Gaussian.
+
+Since $Y=X^2$ is a non-constant deterministic function of $X$, $X$ and $Y$ are dependent. Distance correlation satisfies
+
+$$\mathcal{R}(X,Y)=0
+\quad \Longleftrightarrow \quad
+X \text{ and } Y \text{ are independent}.$$
+
+Therefore, since $X$ and $Y$ are dependent,
+
+$$\mathcal{R}(X,Y)>0.$$
+
+------------------------------------------------------------------------
+
+## Exercise 2 - Autocovariance and autocorrelation of white noise
+
+### Model
+
+$$Y_t \overset{\text{i.i.d.}}{\sim} \mathcal{N}(0, 5^2), \qquad n = 500.$$
+
+### 2.1 Simulate the process
+
+> Simulate a white noise process $Y_t \overset{\text{i.i.d.}}{\sim} \mathcal{N}(0, 5^2)$ of length $n = 500$.
+
+```{r white-noise-simulation}
+n <- 500
+sigma <- 5
+y_wn <- rnorm(n, mean = 0, sd = sigma)
+```
+
+### 2.2 Plot the generated time series
+
+> Plot the generated time series.
+
+```{r white-noise-plot, fig.width=8, fig.height=4}
+plot_series(y_wn, "White noise process")
+```
+
+The series fluctuates around zero and does not show a visible time pattern.
+
+### 2.3 Compute empirical autocovariance and autocorrelation
+
+> Compute the empirical autocovariance $\hat{\gamma}(h)$ and autocorrelation $\hat{\rho}(h)$ for lags $h = 0, 1, \ldots, n - 1$, manually and using the R function `acf()`.
+
+```{r white-noise-acf}
+wn_manual <- manual_acf(y_wn)
+wn_acf <- acf(y_wn, type = "correlation", lag.max = n - 1, plot = FALSE)
+wn_acov <- acf(y_wn, type = "covariance", lag.max = n - 1, plot = FALSE)
+
+wn_results <- transform(
+  wn_manual,
+  autocorrelation_acf = as.numeric(wn_acf$acf),
+  autocovariance_acf = as.numeric(wn_acov$acf)
+)
+
+all.equal(wn_results$autocorrelation, wn_results$autocorrelation_acf)
+all.equal(wn_results$autocovariance, wn_results$autocovariance_acf)
+```
+
+```{r white-noise-empirical-acf, fig.width=8, fig.height=4}
+ggplot(wn_results, aes(lag, autocorrelation)) +
+  geom_segment(aes(xend = lag, y = 0, yend = autocorrelation), colour = "#2C7FB8") +
+  labs(title = "Empirical autocorrelation of white noise",
+       x = "Lag", y = expression(hat(rho)(h))) +
+  theme_minimal()
+```
+
+The manual estimates and `acf()` give the same result. Apart from lag zero, the sample autocorrelations fluctuate around zero.
+
+### 2.4 Derive the theoretical functions
+
+> Derive the theoretical autocovariance and autocorrelation function of the process.
+
+### Derivation
+
+```{r white-noise-theoretical-values}
+wn_results$autocovariance_theoretical <- ifelse(wn_results$lag == 0, sigma^2, 0)
+wn_results$autocorrelation_theoretical <- ifelse(wn_results$lag == 0, 1, 0)
+```
+
+### 2.5 Compare autocorrelation and distance autocorrelation
+
+> Compare the empirical and theoretical autocorrelation and distance autocorrelation. *Hint: Use Theorem 7 in Székely, Rizzo, and Bakirov (2007) to compute the theoretical distance autocorrelation.*
+
+### Comparison notes
+
+```{r white-noise-dacf}
+wn_results$distance_autocorrelation <- empirical_dacf(y_wn)
+wn_results$distance_autocorrelation_theoretical <-
+  dcor_gaussian(wn_results$autocorrelation_theoretical)
+```
+
+```{r white-noise-comparisons, fig.width=8, fig.height=8}
+wn_short <- subset(wn_results, lag <= 40)
+
+plot_comparison(wn_short, "autocorrelation", "autocorrelation_theoretical",
+                "Autocorrelation", "White noise: empirical and theoretical ACF")
+plot_comparison(wn_short, "distance_autocorrelation", "distance_autocorrelation_theoretical",
+                "Distance autocorrelation", "White noise: empirical and theoretical DACF")
+```
+
+The theoretical ACF and DACF are zero for all positive lags. The empirical values are not exactly zero because they are calculated from a finite sample.
+
+------------------------------------------------------------------------
+
+## Exercise 3 - Autocovariance and autocorrelation of an AR(1) process
+
+### Model
+
+$$Y_t = 0.7Y_{t-1} + \varepsilon_t, \qquad \varepsilon_t \sim \mathcal{N}(0, 2^2), \qquad n = 500.$$
+
+### 3.1 Simulate a trajectory
+
+> Simulate a trajectory of length $n = 500$.
+
+```{r ar1-simulation}
+phi <- 0.7
+sigma_e <- 2
+y_ar1 <- as.numeric(arima.sim(model = list(ar = phi), n = n, sd = sigma_e))
+```
+
+### 3.2 Plot the generated time series
+
+> Plot the generated time series.
+
+```{r ar1-plot, fig.width=8, fig.height=4}
+plot_series(y_ar1, "AR(1) process")
+```
+
+The series shows persistence: consecutive observations tend to move together.
+
+### 3.3 Compute empirical autocovariance and autocorrelation
+
+> Compute the empirical autocovariance $\hat{\gamma}(h)$ and autocorrelation $\hat{\rho}(h)$ for lags $h = 0, 1, \ldots, n - 1$, manually and using the R function `acf()`.
+
+```{r ar1-acf}
+ar1_manual <- manual_acf(y_ar1)
+ar1_acf <- acf(y_ar1, type = "correlation", lag.max = n - 1, plot = FALSE)
+ar1_acov <- acf(y_ar1, type = "covariance", lag.max = n - 1, plot = FALSE)
+
+ar1_results <- transform(
+  ar1_manual,
+  autocorrelation_acf = as.numeric(ar1_acf$acf),
+  autocovariance_acf = as.numeric(ar1_acov$acf)
+)
+
+all.equal(ar1_results$autocorrelation, ar1_results$autocorrelation_acf)
+all.equal(ar1_results$autocovariance, ar1_results$autocovariance_acf)
+```
+
+```{r ar1-empirical-acf, fig.width=8, fig.height=4}
+ggplot(subset(ar1_results, lag <= 40), aes(lag, autocorrelation)) +
+  geom_segment(aes(xend = lag, y = 0, yend = autocorrelation), colour = "#2C7FB8") +
+  labs(title = "Empirical autocorrelation of the AR(1) process",
+       x = "Lag", y = expression(hat(rho)(h))) +
+  theme_minimal()
+```
+
+The manual estimates and `acf()` agree. The empirical ACF decreases gradually as the lag increases.
+
+### 3.4 Derive the theoretical functions
+
+> Derive the theoretical autocovariance and autocorrelation function of the process.
+
+### Derivation
+
+```{r ar1-theoretical-values}
+ar1_results$autocovariance_theoretical <-
+  (sigma_e^2 / (1 - phi^2)) * phi^ar1_results$lag
+ar1_results$autocorrelation_theoretical <- phi^ar1_results$lag
+```
+
+### 3.5 Compare autocorrelation and distance autocorrelation
+
+> Compare the empirical and theoretical autocorrelation and distance autocorrelation. *Hint: Use Theorem 7 in Székely, Rizzo, and Bakirov (2007) to compute the theoretical distance autocorrelation.*
+
+### Comparison notes
+
+```{r ar1-dacf}
+ar1_results$distance_autocorrelation <- empirical_dacf(y_ar1)
+ar1_results$distance_autocorrelation_theoretical <-
+  dcor_gaussian(ar1_results$autocorrelation_theoretical)
+```
+
+```{r ar1-comparisons, fig.width=8, fig.height=8}
+ar1_short <- subset(ar1_results, lag <= 40)
+
+plot_comparison(ar1_short, "autocorrelation", "autocorrelation_theoretical",
+                "Autocorrelation", "AR(1): empirical and theoretical ACF")
+plot_comparison(ar1_short, "distance_autocorrelation", "distance_autocorrelation_theoretical",
+                "Distance autocorrelation", "AR(1): empirical and theoretical DACF")
+```
+
+Both empirical measures decay towards zero with the lag. Small differences from the theoretical curves are due to simulation variability.
+
+------------------------------------------------------------------------
+
+## Exercise 4 - Autocovariance and autocorrelation of an MA(1) process
+
+### Model
+
+$$Y_t = \varepsilon_t + 0.5\varepsilon_{t-1}, \qquad \varepsilon_t \sim \mathcal{N}(0, 2^2), \qquad n = 500.$$
+
+### 4.1 Simulate a trajectory
+
+> Simulate a trajectory of length $n = 500$.
+
+```{r ma1-simulation}
+theta <- 0.5
+sigma_e <- 2
+y_ma1 <- as.numeric(arima.sim(model = list(ma = theta), n = n, sd = sigma_e))
+```
+
+### 4.2 Plot the generated time series
+
+> Plot the generated time series.
+
+```{r ma1-plot, fig.width=8, fig.height=4}
+plot_series(y_ma1, "MA(1) process")
+```
+
+The series has short-term dependence because neighbouring observations share one innovation.
+
+### 4.3 Compute empirical autocovariance and autocorrelation
+
+> Compute the empirical autocovariance $\hat{\gamma}(h)$ and autocorrelation $\hat{\rho}(h)$ for lags $h = 0, 1, \ldots, n - 1$, manually and using the R function `acf()`.
+
+```{r ma1-acf}
+ma1_manual <- manual_acf(y_ma1)
+ma1_acf <- acf(y_ma1, type = "correlation", lag.max = n - 1, plot = FALSE)
+ma1_acov <- acf(y_ma1, type = "covariance", lag.max = n - 1, plot = FALSE)
+
+ma1_results <- transform(
+  ma1_manual,
+  autocorrelation_acf = as.numeric(ma1_acf$acf),
+  autocovariance_acf = as.numeric(ma1_acov$acf)
+)
+
+all.equal(ma1_results$autocorrelation, ma1_results$autocorrelation_acf)
+all.equal(ma1_results$autocovariance, ma1_results$autocovariance_acf)
+```
+
+```{r ma1-empirical-acf, fig.width=8, fig.height=4}
+ggplot(subset(ma1_results, lag <= 40), aes(lag, autocorrelation)) +
+  geom_segment(aes(xend = lag, y = 0, yend = autocorrelation), colour = "#2C7FB8") +
+  labs(title = "Empirical autocorrelation of the MA(1) process",
+       x = "Lag", y = expression(hat(rho)(h))) +
+  theme_minimal()
+```
+
+The manual estimates and `acf()` agree. The main dependence is at lag one; later sample correlations fluctuate around zero.
+
+### 4.4 Derive the theoretical functions
+
+> Derive the theoretical autocovariance and autocorrelation function of the process.
+
+### Derivation
+
+```{r ma1-theoretical-values}
+ma1_results$autocovariance_theoretical <- ifelse(
+  ma1_results$lag == 0,
+  sigma_e^2 * (1 + theta^2),
+  ifelse(ma1_results$lag == 1, sigma_e^2 * theta, 0)
+)
+
+ma1_results$autocorrelation_theoretical <- ifelse(
+  ma1_results$lag == 0,
+  1,
+  ifelse(ma1_results$lag == 1, theta / (1 + theta^2), 0)
+)
+```
+
+### 4.5 Compare autocorrelation and distance autocorrelation
+
+> Compare the empirical and theoretical autocorrelation and distance autocorrelation. *Hint: Use Theorem 7 in Székely, Rizzo, and Bakirov (2007) to compute the theoretical distance autocorrelation.*
+
+### Comparison notes
+
+```{r ma1-dacf}
+ma1_results$distance_autocorrelation <- empirical_dacf(y_ma1)
+ma1_results$distance_autocorrelation_theoretical <-
+  dcor_gaussian(ma1_results$autocorrelation_theoretical)
+```
+
+```{r ma1-comparisons, fig.width=8, fig.height=8}
+ma1_short <- subset(ma1_results, lag <= 40)
+
+plot_comparison(ma1_short, "autocorrelation", "autocorrelation_theoretical",
+                "Autocorrelation", "MA(1): empirical and theoretical ACF")
+plot_comparison(ma1_short, "distance_autocorrelation", "distance_autocorrelation_theoretical",
+                "Distance autocorrelation", "MA(1): empirical and theoretical DACF")
+```
+
+The theoretical ACF and DACF are non-zero at lag one only. The empirical estimates show small values at later lags because the sample is finite.
+
+------------------------------------------------------------------------
+
+## Reference from the assignment
+
+Székely, Gábor J., Maria L. Rizzo, and Nail K. Bakirov (2007). “Measuring and Testing Dependence by Correlation of Distances.” *The Annals of Statistics*, 35(6), 2769-2794.
