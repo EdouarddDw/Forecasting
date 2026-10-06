@@ -1,0 +1,456 @@
+---
+title: "Practical 3 — Time Series Decomposition: Additive and Multiplicative Models"
+subtitle: "Forecasting with Applications in Business (S411031) — GSEM, University of Geneva"
+author: "Prof. Jeffrey Näf — Huimin Hu"
+date: "Fall Semester 2026"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(fpp3)
+library(tsibbledata)
+library(datasets)
+library(ggplot2)
+library(ggfortify)
+
+```
+
+# Exercise 1. Additive Decomposition: Beer Production Data
+
+- Load the dataset `aus_production` from the package `tsibbledata`, read the dataset's description and extract quarterly beer production from 1992 Q1 to 2000 Q4.
+
+```{r ex1-load}
+beer <- aus_production |>
+  filter_index("1992 Q1" ~ "2000 Q4") |>
+  select(Beer)
+
+```
+
+- Plot the time series.
+
+```{r ex1-plot}
+autoplot(beer, ts.colour = "blue")
+```
+
+- Perform a manual decomposition using LOESS for trend and average detrended values per quarter for seasonality.
+
+```{r ex1-manual}
+
+# 1. Trend: LOESS on a time index
+beer <- beer |>
+  mutate(t = row_number())
+
+loess_fit <- loess(Beer ~ t, data = beer, span = 0.5)
+
+beer <- beer |>
+  mutate(
+    trend     = fitted(loess_fit),
+    detrended = Beer - trend,
+    qtr       = quarter(Quarter)
+  )
+
+# 2. Seasonality: average detrended value per quarter
+seasonal_means <- beer |>
+  as_tibble() |>
+  group_by(qtr) |>
+  summarise(seasonal = mean(detrended)) |>
+  mutate(seasonal = seasonal - mean(seasonal))   # centre so the effects sum to 0
+
+# 3. Put it back together and compute the remainder
+beer_manual <- beer |>
+  left_join(seasonal_means, by = "qtr") |>
+  mutate(remainder = Beer - trend - seasonal)
+
+
+beer_manual |>
+  select(Quarter, Beer, trend, seasonal, remainder) |>
+  pivot_longer(-Quarter, names_to = "component", values_to = "value") |>
+  mutate(component = factor(component,
+                            levels = c("Beer", "trend", "seasonal", "remainder"))) |>
+  autoplot(value) +
+  facet_grid(component ~ ., scales = "free_y") +
+  theme(legend.position = "none")
+```
+
+- Perform an STL decomposition using `STL()` from the `fpp3` package.
+
+```{r ex1-stl}
+beer_stl <- beer |>
+  model(STL(Beer))
+
+beer_stl |> components()             # table with trend, season_year, remainder, season_adjust
+beer_stl |> components() |> autoplot()
+
+```
+
+# Exercise 2. Synthetic Additive Time Series
+
+- Generate a quarterly additive series with linear trend, seasonal component, and Gaussian noise:
+
+$$Y_t = T_t + S_t + \varepsilon_t$$
+
+```{r ex2-generate}
+n = 100
+t <- 1:n
+
+trend <- 30 + 0.8 * t
+seasonal <- rep(c(10, -5, -15, 10), length.out = n) # sums tp 0 over a year
+noise    <- rnorm(n, mean = 0, sd = 3)
+
+y <- trend + seasonal + noise
+
+synth_add <- tsibble(
+  Quarter  = yearquarter("2000 Q1") + 0:(n - 1),
+  y        = y,
+  trend    = trend,
+  seasonal = seasonal,
+  noise    = noise,
+  index    = Quarter
+)
+
+```
+
+- Plot the generated series.
+
+```{r ex2-plot}
+synth_add |> autoplot(y)
+```
+
+- Perform a manual decomposition using LOESS for the trend and average detrended values per quarter for seasonality.
+
+```{r ex2-manual}
+loess_fit <- loess(y ~ t, data = synth_add, span = 0.5)
+
+```
+
+- Perform STL decomposition.
+
+```{r ex2-stl}
+# 1. Trend: LOESS on a time index
+synth_work <- synth_add |>
+  mutate(t = row_number())
+
+loess_fit <- loess(y ~ t, data = synth_work, span = 0.5)
+
+synth_work <- synth_work |>
+  mutate(
+    trend_manual = fitted(loess_fit),
+    detrended    = y - trend_manual,
+    qtr          = quarter(Quarter)
+  )
+
+# 2. Seasonality: average detrended value per quarter
+seasonal_means <- synth_work |>
+  as_tibble() |>
+  group_by(qtr) |>
+  summarise(seasonal_manual = mean(detrended)) |>
+  mutate(seasonal_manual = seasonal_manual - mean(seasonal_manual))
+
+# 3. Put it back together and compute the remainder
+synth_manual <- synth_work |>
+  left_join(seasonal_means, by = "qtr") |>
+  mutate(remainder_manual = y - trend_manual - seasonal_manual)
+
+
+#plot it to look nice
+synth_manual |>
+  select(Quarter, y, trend_manual, seasonal_manual, remainder_manual) |>
+  pivot_longer(-Quarter, names_to = "component", values_to = "value") |>
+  mutate(component = factor(component,
+                            levels = c("y", "trend_manual",
+                                       "seasonal_manual", "remainder_manual"))) |>
+  autoplot(value) +
+  facet_grid(component ~ ., scales = "free_y") +
+  theme(legend.position = "none")
+
+```
+
+- Compare the true value of the trend, seasonal and error components with their estimated values using a manually implemented STL decomposition and the implemented STL method.
+
+```{r ex2-compare}
+# 1. STL estimates
+stl_comp <- synth_add |>
+  model(STL(y ~ season(window = "periodic"))) |>
+  components() |>
+  as_tibble() |>
+  select(Quarter,
+         trend_stl     = trend,
+         seasonal_stl  = season_year,
+         remainder_stl = remainder)
+
+# 2. Truth + manual + STL in one table
+comparison <- synth_manual |>
+  as_tibble() |>
+  select(Quarter,
+         trend_true     = trend,
+         seasonal_true  = seasonal,
+         remainder_true = noise,
+         trend_manual, seasonal_manual, remainder_manual) |>
+  left_join(stl_comp, by = "Quarter")
+
+# 3. Long format: one row per quarter × component × method
+comparison_long <- comparison |>
+  pivot_longer(-Quarter,
+               names_to  = c("component", "method"),
+               names_sep = "_",
+               values_to = "value") |>
+  mutate(component = factor(component, levels = c("trend", "seasonal", "remainder")))
+
+
+comparison_long |>
+  as_tsibble(index = Quarter, key = c(component, method)) |>
+  autoplot(value) +
+  facet_grid(component ~ ., scales = "free_y")
+
+
+truth <- comparison_long |>
+  filter(method == "true") |>
+  select(Quarter, component, true_value = value)
+
+comparison_long |>
+  filter(method != "true") |>
+  left_join(truth, by = c("Quarter", "component")) |>
+  group_by(component, method) |>
+  summarise(RMSE = sqrt(mean((value - true_value)^2)), .groups = "drop")
+
+```
+
+# Exercise 3. Multiplicative Decomposition: AirPassengers
+
+- Use the dataset `AirPassengers` from the package `datasets`. Plot the series.
+
+```{r ex3-plot}
+head(AirPassengers)
+```
+
+- Transform the series using logarithm to perform a multiplicative decomposition.
+
+```{r ex3-log}
+air <- AirPassengers |>
+  as_tsibble() |>
+  mutate(log_value = log(value),
+         t = row_number())
+
+head(air)
+```
+
+- Perform a manual decomposition (LOESS for trend, average detrended by month for seasonality) and STL decomposition.
+
+```{r ex3-manual-stl}
+#find trend using LOESS
+loess_fit <- loess(log_value ~ t, data = air, span = 0.5)
+
+#remutate data with detrended
+air <- air |>
+  mutate(
+    trend = fitted(loess_fit),
+    detrended = log_value - trend,
+    mth = month(index)
+  )
+
+#find seasonal mean (by month)
+seasonal_means <- air |>
+  as_tibble() |>
+  group_by(mth) |>
+  summarise(seasonal = mean(detrended)) |>
+  mutate(seasonal = seasonal - mean(seasonal))
+
+# put it all together
+air_manual <- air |>
+  left_join(seasonal_means, by = 'mth') |>
+  mutate(remainder = log_value - trend - seasonal)
+
+#plot
+air_manual |>
+  select(index, log_value, trend, seasonal, remainder) |>
+  pivot_longer(-index, names_to = "component", values_to = "value") |>
+  mutate(component = factor(component,
+                            levels = c("log_value", "trend", "seasonal", "remainder"))) |>
+  autoplot(value) +
+  facet_grid(component ~ ., scales = "free_y") +
+  theme(legend.position = "none")
+  
+
+```
+
+- Plot and compare the trend, seasonal, and remainder components from the manual and STL decompositions on log-scale.
+
+```{r ex3-compare}
+
+# 1. STL on the log series
+air_stl <- air |>
+  model(STL(log_value ~ season(window = "periodic"))) |>
+  components() |>
+  as_tibble() |>
+  select(index,
+         trend_stl     = trend,
+         seasonal_stl  = season_year,
+         remainder_stl = remainder)
+
+# 2. Manual + STL in one table
+air_compare <- air_manual |>
+  as_tibble() |>
+  select(index,
+         trend_manual     = trend,
+         seasonal_manual  = seasonal,
+         remainder_manual = remainder) |>
+  left_join(air_stl, by = "index")
+
+# 3. Long format: one row per month × component × method
+air_compare_long <- air_compare |>
+  pivot_longer(-index,
+               names_to  = c("component", "method"),
+               names_sep = "_",
+               values_to = "value") |>
+  mutate(component = factor(component, levels = c("trend", "seasonal", "remainder")))
+
+# 4. Plot
+air_compare_long |>
+  as_tsibble(index = index, key = c(component, method)) |>
+  autoplot(value) +
+  facet_grid(component ~ ., scales = "free_y") +
+  labs(y = "log scale", title = "AirPassengers: manual vs STL decomposition")
+
+```
+
+# Exercise 4. Synthetic Multiplicative Time Series
+
+- Generate a synthetic monthly multiplicative series:
+
+$$Y_t = T_t \times S_t \times \varepsilon_t$$
+
+with increasing trend, multiplicative seasonal pattern, and multiplicative noise.
+
+```{r ex4-generate}
+set.seed(123)
+
+n <- 36
+t <- 1:n
+
+trend    <- 12 + 0.43 * t
+seasonal <- rep(c(0.90, 0.88, 0.95, 1.00, 1.05, 1.15,
+                  1.25, 1.22, 1.05, 0.95, 0.85, 0.75), length.out = n)
+noise    <- exp(rnorm(n, mean = 0, sd = 0.05))   # factors around 1, about ±5%
+
+y <- trend * seasonal * noise
+
+synth_mult <- tsibble(
+  Month    = yearmonth("2000 Jan") + 0:(n - 1),
+  y        = y,
+  trend    = trend,
+  seasonal = seasonal,
+  noise    = noise,
+  index    = Month
+)
+
+
+```
+
+- Plot the series.
+
+```{r ex4-plot}
+synth_mult |> autoplot(y)
+```
+
+- Transform using logarithm and perform manual decomposition (trend via LOESS, seasonal via average detrended per month) and STL decomposition.
+
+```{r ex4-manual-stl}
+synth_dec <- synth_mult |>
+  mutate(y_log = log(y),
+         t     = row_number())
+
+# trend
+model_loess <- loess(y_log ~ t, data = synth_dec, span = 0.9) #played around with the span cause it looked very wroong at first with 0.5
+
+# organise
+synth_dec <- synth_dec |>
+  mutate(
+    trend_manual = fitted(model_loess),
+    detrended    = y_log - trend_manual,
+    mth          = month(Month)
+  )
+
+# seasonal
+seasonal_mean <- synth_dec |>
+  as_tibble() |>
+  group_by(mth) |>
+  summarise(seasonal_manual = mean(detrended)) |>
+  mutate(seasonal_manual = seasonal_manual - mean(seasonal_manual))
+
+# join + add error term
+synth_dec <- synth_dec |>
+  left_join(seasonal_mean, by = "mth") |>
+  mutate(remainder_manual = y_log - trend_manual - seasonal_manual)
+
+# plot
+synth_dec |>
+  select(Month, y_log, trend_manual, seasonal_manual, remainder_manual) |>
+  pivot_longer(-Month, names_to = "component", values_to = "value") |>
+  mutate(component = factor(component,
+                            levels = c("y_log", "trend_manual",
+                                       "seasonal_manual", "remainder_manual"))) |>
+  autoplot(value) +
+  facet_grid(component ~ ., scales = "free_y") +
+  theme(legend.position = "none") +
+  labs(y = "log scale", title = "Manual decomposition (log scale)")
+
+
+# STL estimates
+synth_stl <- synth_dec |>
+  model(STL(y_log ~ season(window = "periodic"))) |>
+  components() |>
+  as_tibble() |>
+  select(Month,
+         trend_stl     = trend,
+         seasonal_stl  = season_year,
+         remainder_stl = remainder)
+
+
+
+
+```
+
+- Compare the true value of the trend, seasonal and error components with their estimated values using a manually implemented STL decomposition and the implemented STL method. (all on log-scale).
+
+```{r ex4-compare}
+# True (log scale) + manual + STL
+synth_compare <- synth_dec |>
+  as_tibble() |>
+  mutate(trend_true     = log(trend),
+         seasonal_true  = log(seasonal),
+         remainder_true = log(noise)) |>
+  select(Month,
+         trend_true, seasonal_true, remainder_true,
+         trend_manual, seasonal_manual, remainder_manual) |>
+  left_join(synth_stl, by = "Month")
+
+# Long format
+synth_compare_long <- synth_compare |>
+  pivot_longer(-Month,
+               names_to  = c("component", "method"),
+               names_sep = "_",
+               values_to = "value") |>
+  mutate(component = factor(component, levels = c("trend", "seasonal", "remainder")))
+
+# Plot
+synth_compare_long |>
+  as_tsibble(index = Month, key = c(component, method)) |>
+  autoplot(value) +
+  facet_grid(component ~ ., scales = "free_y") +
+  labs(y = "log scale", title = "True vs manual vs STL decomposition (log scale)")
+
+# RMSE vs truth
+truth <- synth_compare_long |>
+  filter(method == "true") |>
+  select(Month, component, true_value = value)
+
+synth_compare_long |>
+  filter(method != "true") |>
+  left_join(truth, by = c("Month", "component")) |>
+  group_by(component, method) |>
+  summarise(RMSE = sqrt(mean((value - true_value)^2)), .groups = "drop")
+```
