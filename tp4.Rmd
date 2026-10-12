@@ -1,0 +1,227 @@
+---
+title: "Practical 4 – Stationarity"
+subtitle: "Forecasting with Applications in Business (S411031) – Fall Semester 2026"
+author: "Edouard"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r packages}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(forecast)
+set.seed(42)
+```
+
+# Recall
+
+## Strong stationarity
+
+The process $(Y_t)_t$ with values in $\mathbb{R}^n$ is said to be **strongly stationary** if, for any $s \geq 1$, and $t_1 \leqslant t_2 \leqslant \ldots \leqslant t_s$, and all integers $k$, the joint distribution of $(Y_{t_1}, Y_{t_2}, \ldots, Y_{t_s})$ is the same as that of $(Y_{t_1+k}, Y_{t_2+k}, \ldots, Y_{t_s+k})$.
+
+## Weak stationarity
+
+The process $(Y_t)_t$ with values in $\mathbb{R}$ is said to be **weakly stationary** if, for any integer $s \geq 1$, and $t_1 \leqslant t_2 \leqslant \ldots \leqslant t_s$, and all integer $k$, all the joint moments of order one and two of $(Y_{t_1}, Y_{t_2}, \ldots, Y_{t_s})$ exist, are finite, and equal to the corresponding joint moments of $(Y_{t_1+k}, Y_{t_2+k}, \ldots, Y_{t_s+k})$. Specifically, for any $t$ such that $t_1 \leqslant t \leqslant t_s$,
+
+$$\mathbb{E}[Y_t] \equiv \mu$$
+
+is a constant independent of $t$;
+
+for any $s$ and $t$, the autocovariance function $\gamma(s, t)$ depends on $s$ and $t$ only through their difference $|s - t|$.
+
+# Exercise 1. Strongly Stationary Process
+
+Consider the discrete-time stochastic process
+
+$$Y_t \overset{\text{i.i.d.}}{\sim} \mathcal{N}(0, 1), \quad t \geq 1.$$
+
+**(a)** Simulate $Y_t$ for $t = 1, \ldots, 500$ and plot the resulting time series.
+
+```{r ex1a}
+n <- 500
+y <- rnorm(n, 0, 1)
+autoplot(ts(y))
+```
+
+**(b)** Generate multiple realizations of the process and compute the empirical mean and variance of $Y_t$. Check that they are approximately constant across $t$.
+
+```{r ex1b}
+n <- 500
+n_sim <- 100
+
+Y <- matrix(rnorm(n_sim * n, 0, 1), nrow = n_sim, ncol = n)
+
+emp_mean <- colMeans(Y)
+emp_var <- apply(Y,2, var)
+summary(emp_mean)
+summary(emp_var)
+```
+
+**(c)** Explain why the process is both weakly stationary and strongly stationary, using the definitions of weak and strong stationarity.
+
+since $Y_t$ are i.i.d.$\mathcal{N}(0,1)$ for any  $s \ge 1$, $t_1 \leqslant t_2 \leqslant \ldots \leqslant t_s$ and any integer $k$, joint density of $(Y_{t_1}, \dots,Y_{t_s}$ is
+
+$$f(y_1, \ldots, y_s) = \prod_{i=1}^{s} \phi(y_i),$$ where $\phi$ is the standard normal density. The same holds for $(Y_{t_1+k}, \ldots, Y_{t_s+k})$. The joint distributions are therefore identical, i.e. $(Y_{t_1}, \ldots, Y_{t_s}) \sim \mathcal{N}(0, I_s)$ for any shift $k$, so the process is strongly stationary.
+
+When it come to week stationarity, $\mathbb{E}[Y_t] = 0 \quad\forall t$ since each $Y_t \sim \mathcal{N}(0, 1)$ that give $\mu = 0$ witch does not depend on $t$.
+
+second condtion to week stationarity, we need the autocovariance to only depend on $|s -t|$, $\gamma(s,t) = \text{Cov}(Y_s, Y_t)$:
+
+If $s = t$: $\gamma(t,t) = \text{Var}(Y_t) = 1$. If $s \neq t$: $Y_s$ and $Y_t$ are independent, so $\gamma(s,t) = 0$.
+
+So $\gamma(s,t) = \mathbb{1}\{|s-t| = 0\}$, which depends only on $|s-t|$.
+
+# Exercise 2. Weakly Stationary Process
+
+Consider the discrete-time stochastic process
+
+$$Y_t = \cos(tU), \quad t \geq 1,$$
+
+where $U \sim \text{Uniform}(-\pi, \pi)$.
+
+**(a)** Simulate $Y_t$ for $t = 1, \ldots, 500$ by first sampling a single value of $U$ from $\text{Uniform}(-\pi, \pi)$ and then computing $Y_t = \cos(tU)$ for all $t$. Plot the resulting time series.
+
+```{r ex2a}
+set.seed(16)
+n <- 500
+t <- 1:n
+u <- runif(1, min = - pi, max = pi)
+Y <- cos(t*u)
+autoplot(ts(Y))
+```
+
+**(b)** Generate multiple realizations of the process and compute the empirical mean and variance of $Y_t$. Check that they are approximately constant across $t$.
+
+```{r ex2b}
+set.seed(123)
+n <- 500
+n_sim <- 100
+t <- 1:n
+
+u <- runif(n_sim, min = -pi, max = pi)   # one U per realization
+Y <- cos(outer(u, t))                     # n_sim x n matrix: row = realization, column = t
+
+summary(colMeans(Y))
+summary(apply(Y, 2 , var))
+
+matplot(t, t(Y), type = "l", lty = 1, col = rgb(0, 0, 0, 0.1),
+        xlab = "t", ylab = expression(Y[t]))
+```
+
+**(c)** Show that the process is weakly stationary.
+
+This process is weakly stationary because $\mathbb{E}[Y_t]= 0$ because the expections of cosines of uniform distibtuions are 0. thus $\mu = 0$. and the expection of $Y_t$ does not depend on $t$. thus first condition of weak stationarity hold ($\mathbb{E}[Y_t] \equiv 0$)
+
+now for the second codition, we need the autocorrelation to depend only on $|s-t| \quad \forall \gamma(s,t)$. two cases: $s=t$ where $\gamma(s,s)=var(Y_t)$ $$Var(Y_t) = \mathbb{E}[Y^2_t]-(\mathbb{E}[Y_t])^2=\mathbb{E}[\cos^2(tU)]$$ using the identity $\cos^2= \frac{1+\cos(2x)}{2}$ $$\mathbb{E}[\cos^2(tU)] = \frac{1}{2} + \frac{1}{2}\,\mathbb{E}[\cos(2tU)]=\frac{1}{2}.$$ now when it comes to $\gamma(s,t)$ $$\gamma(s,t) = \text{Cov}(Y_s, Y_t) = \mathbb{E}[Y_s Y_t] = \mathbb{E}[\cos(sU)\cos(tU)].$$ $$\gamma(s,t) = \tfrac{1}{2}\,\mathbb{E}[\cos((s-t)U)] + \tfrac{1}{2}\,\mathbb{E}[\cos((s+t)U)].$$
+
+$$\gamma(s,t) = \begin{cases} \tfrac{1}{2} & \text{if } s = t \\ 0 & \text{if } s \neq t \end{cases}$$
+
+This depends only on $|s-t|$, and it matches the variance of $\frac{1}{2}$. Combined with the constant mean, that proves weak stationarity.
+
+**(d)** Show that the process is not strongly stationary. *Hint:* Consider the third-order moments
+
+$$\mathbb{E}[Y_1 Y_2 Y_3] = \frac{1}{2\pi} \int_{-\pi}^{\pi} \cos(U)\cos(2U)\cos(3U)\, dU.$$
+
+Use the identity
+
+$$\cos(a)\cos(b)\cos(c) = \frac{1}{4}\Big(\cos(a+b+c) + \cos(a+b-c) + \cos(a-b+c) + \cos(a-b-c)\Big),$$
+
+and similarly with $\mathbb{E}[Y_2 Y_3 Y_4]$.
+
+prove $Y_{t} = \cos(tU), t \geq 1$ is **not** strongly stationary where $U \sim U(-\pi,\pi)$ prove by counter example: $$\mathbb{E}[Y_{1}Y_{2}Y_{3}] \neq \mathbb{E}[Y_{2}Y_{3}Y_{4}]$$ if this unequality holds, $Y_{t}$ is not strongly stationary because the joint distribution $(Y_{t_{1}}, Y_{t_{2}},\dots, Y_{t_{s}})$ whould not be the same as of $(Y_{t_{1}+k}, Y_{t_{2}+k},\dots, Y_{t_{s}+k})$ for $k=1$
+
+lets start by finding $\mathbb{E}[Y_{1}Y_{2}Y_{3}]$
+
+$$\mathbb{E}[Y_{1}Y_{2}Y_{3}]=\frac{1}{2\pi}\int^\pi_{-\pi}\cos(U)+\cos(2U)+\cos(3U)du$$
+
+$$\Leftrightarrow \frac{1}{2\pi}\int^\pi_{-\pi} \frac{1}{4} (\cos(u+2u+3u)+\cos(u+2u-3u)+\cos(u-2u+3u)+\cos(u-2u-3u))du$$
+
+$$\Leftrightarrow \frac{1}{2\pi} \int^\pi_{-\pi} \frac{1}{4}
+(\cos(6u)+\cos(0)+\cos(2u)+\cos(-4u))$$ $$\Leftrightarrow \frac{1}{2\pi} \cdot \frac{1}{4} \left( \int \cos(6u)\, \mathrm{d}u + \int \cos(0)\, \mathrm{d}u + \int \cos(2u)\, \mathrm{d}u + \int \cos(-4u)\, \mathrm{d}u \right)$$ $$\Leftrightarrow \frac{1}{2\pi} \cdot \frac{1}{4} \left( \frac{\sin(6u)}{6}+u+\frac{\sin(2u)}{2}+\frac{\sin(4u)}{4} \biggr |^\pi_{-\pi} \right)$$
+
+$$\Leftrightarrow  \frac{1}{2\pi} \cdot \frac{1}{4} \left( \left[\frac{\sin(6\pi)}{6} + \pi + \frac{\sin(2\pi)}{2} + \frac{\sin(4\pi)}{4}\right] - \left[\frac{\sin(-6\pi)}{6} - \pi + \frac{\sin(-2\pi)}{2} + \frac{\sin(-4\pi)}{4}\right] \right)$$ $$ \Leftrightarrow  \frac{1}{2\pi} \cdot \frac{1}{4} \left( \left[0 + \pi + 0 + 0\right] - \left[0 - \pi + 0 + 0\right] \right)$$ $$\Leftrightarrow \frac{1}{8\pi} \cdot 2\pi =\frac{1}{4}$$
+
+now we find $\mathbb{E}[Y_{2}Y_{3}Y_{4}]$ $$\mathbb{E}[Y_{2}Y_{3}Y_{4}]=\frac{1}{2\pi}\int^\pi_{-\pi}\cos(2u)\cos(3u)\cos(4u)\,\mathrm{d}u$$ $$\Leftrightarrow \frac{1}{2\pi}\int^\pi_{-\pi} \frac{1}{4} (\cos(2u+3u+4u)+\cos(2u+3u-4u)+\cos(2u-3u+4u)+\cos(2u-3u-4u))\,\mathrm{d}u$$
+
+$$\Leftrightarrow \frac{1}{2\pi} \int^\pi_{-\pi} \frac{1}{4} (\cos(9u)+\cos(u)+\cos(3u)+\cos(-5u))\,\mathrm{d}u$$
+
+$$\Leftrightarrow \frac{1}{2\pi} \cdot \frac{1}{4} \left( \int \cos(9u)\, \mathrm{d}u + \int \cos(u)\, \mathrm{d}u + \int \cos(3u)\, \mathrm{d}u + \int \cos(-5u)\, \mathrm{d}u \right)$$
+
+$$\Leftrightarrow \frac{1}{2\pi} \cdot \frac{1}{4} \left( \frac{\sin(9u)}{9}+\sin(u)+\frac{\sin(3u)}{3}+\frac{\sin(5u)}{5} \biggr |^\pi_{-\pi} \right)$$
+
+$$\Leftrightarrow \frac{1}{2\pi} \cdot \frac{1}{4} \left( \left[\frac{\sin(9\pi)}{9} + \sin(\pi) + \frac{\sin(3\pi)}{3} + \frac{\sin(5\pi)}{5}\right] - \left[\frac{\sin(-9\pi)}{9} + \sin(-\pi) + \frac{\sin(-3\pi)}{3} + \frac{\sin(-5\pi)}{5}\right] \right)$$
+
+$$\Leftrightarrow \frac{1}{2\pi} \cdot \frac{1}{4} \left( \left[0 + 0 + 0 + 0\right] - \left[0 + 0 + 0 + 0\right] \right)$$
+
+$$\Leftrightarrow \frac{1}{8\pi} \cdot 0 = 0$$ hence $$\mathbb{E}[Y_{1}Y_{2}Y_{3}] = \frac{1}{4} \neq 0 = \mathbb{E}[Y_{2}Y_{3}Y_{4}],$$ so the joint distributions of $(Y_{1}, Y_{2}, Y_{3})$ differ from $(Y_{2},Y_{3}, Y_{4})$ thus $Y_{t}$ is not strongly stationary.
+
+# Exercise 3. Non-Stationary Process
+
+Consider the discrete-time stochastic process
+
+$$S_t = \sum_{i=1}^{t} Y_i, \quad t \geq 1,$$
+
+where $Y_i \overset{\text{i.i.d.}}{\sim} \mathcal{N}(0, \sigma^2)$. This defines a simple random walk.
+
+**(a)** Simulate a realization of $S_t$ for $t = 1, \ldots, 500$ and plot the resulting time series.
+
+```{r ex3a}
+n= 500
+Y = rnorm(n,0, 1)
+S = cumsum(Y)
+
+autoplot(ts(S))
+```
+
+**(b)** Generate multiple realizations of the process and compute the empirical mean and variance of $S_t$ at each time $t$. Plot the variance as a function of $t$.
+
+```{r ex3b}
+num_sim <- 100
+n <- 500
+
+Y <- matrix(rnorm(num_sim * n, 0, 1), nrow = num_sim, ncol = n)
+S <- t(apply(Y, 1, cumsum))   # each row is one random walk
+
+emp_var <- apply(S, 2, var)
+
+plot(1:n, emp_var, type = "l", xlab = "t", ylab = "Empirical variance")
+abline(a = 0, b = 1, col = "red")   # theoretical Var(S_t) = t * sigma^2, here sigma = 1
+
+```
+
+**(c)** Compute the autocovariance function of the process. Is this process weakly stationary?
+
+First, the mean:
+
+$$\mathbb{E}[S_t] = \mathbb{E}\left[\sum_{i=1}^{t} Y_i\right] = \sum_{i=1}^{t} \mathbb{E}[Y_i] = 0 \quad \forall t,$$
+
+so the mean is constant. Now the autocovariance, taking $s \leq t$ without loss of generality. We can split $S_t$ as
+
+$$S_t = S_s + \sum_{i=s+1}^{t} Y_i.$$
+
+Then
+
+$$\begin{aligned}
+\gamma(s,t) &= \mathrm{Cov}(S_s, S_t) \\
+&= \mathrm{Cov}\left(S_s,\, S_s + \sum_{i=s+1}^{t} Y_i\right) \\
+&= \mathrm{Cov}(S_s, S_s) + \mathrm{Cov}\left(S_s,\, \sum_{i=s+1}^{t} Y_i\right).
+\end{aligned}$$
+
+The second term is $0$, since $S_s$ depends only on $Y_1, \dots, Y_s$, which are independent of $Y_{s+1}, \dots, Y_t$. By independence of the $Y_i$, the first term is
+
+$$\mathrm{Var}(S_s) = \sum_{i=1}^{s} \mathrm{Var}(Y_i) = s\sigma^2.$$
+
+Hence
+
+$$\gamma(s,t) = \sigma^2 \min(s,t).$$
+
+This depends on $\min(s,t)$ and not only on $|s-t|$. For example, with the same lag $|s-t| = 1$:
+
+$$\gamma(1,2) = \sigma^2 \neq 10\sigma^2 = \gamma(10,11).$$
+
+In particular, $\mathrm{Var}(S_t) = \gamma(t,t) = t\sigma^2$ grows with $t$, as seen in the variance plot in (b). Therefore $S_t$ is **not weakly stationary**.
