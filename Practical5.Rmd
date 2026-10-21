@@ -1,0 +1,320 @@
+---
+title: "Practical 5 — Forecast evaluation and proper scoring"
+subtitle: "Forecasting with Applications in Business (S411031) — GSEM, University of Geneva"
+author: "Prof. Jeffrey Näf — Huimin Hu"
+date: "Fall Semester 2026"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(42)
+```
+
+# Exercise 1. Forecasting with ARMA(1,1) and Parametric Bootstrap
+
+**1.** Write a function `simulate_arma11` that takes as inputs starting values for $Y$ (`Y0`), $\varepsilon$ (`eps0`), the length of the series `N`, and parameters `phi`, `theta`, `sigma`, and returns a simulated series from an ARMA(1,1) process of length `N`. (Note that we use $T$ instead of $N$ in the lecture, but in R, `T` is reserved for `TRUE`.)
+
+```{r ex1-simulate-function}
+simulate_arma11 <- function(Y0, eps0, N, phi, theta, sigma){
+  draws <- numeric(N + 1)
+  shock <- numeric(N + 1)
+  draws[1] <- Y0
+  shock[1] <- eps0
+
+  for (i in 1:N){
+    m <- phi * draws[i] + theta * shock[i]          # conditional mean
+    draws[i + 1] <- rnorm(1, mean = m, sd = sigma)  # new Y
+    shock[i + 1] <- draws[i + 1] - m                # its shock
+  }
+
+  draws[-1]  # drop Y0, return the N simulated values
+}
+  
+
+```
+
+**2.** Use this function to generate a time series of length $N = 200$ from an ARMA(1,1) process with starting values $Y_0 = 0$ and $\varepsilon_0 = 0$ and parameters $\phi = 0.6$, $\theta = 0.3$, and innovation variance $\sigma^2 = 1$.
+
+```{r ex1-generate-series}
+sim <- simulate_arma11(Y0=0, eps0=0, N=200, phi=0.6, theta=0.3, sigma=1)
+str(sim)
+```
+
+**3.** Split the data into a training set (70%) and a test set (30%).
+
+```{r ex1-split}
+n_train <- floor(0.7 * length(sim))
+
+train <- sim[1:n_train]
+test  <- sim[(n_train + 1):length(sim)]
+
+H <- length(test)  # forecast horizon
+
+```
+
+**4.** Fit an ARMA(1,1) model on the training data.
+
+```{r ex1-fit}
+fit <- arima(train, order = c(1, 0, 1))
+fit
+
+```
+
+**5.** Use the `simulate_arma11` function to generate forecasts (what are the starting values in this case?):
+
+- Simulate $B = 500$ bootstrap sample paths from the fitted model for the test horizon.
+- From these bootstrap forecasts, compute the mean forecast and the 90% prediction interval (5% and 95% quantiles).
+
+> **Answer (starting values):**
+
+```{r ex1-bootstrap}
+B  <- 500
+mu <- coef(fit)["intercept"]
+
+# B bootstrap paths: rows = horizons (1..H), columns = paths
+paths <- replicate(B, simulate_arma11(
+  Y0    = tail(train, 1) - mu,
+  eps0  = tail(residuals(fit), 1),
+  N     = H,
+  phi   = coef(fit)["ar1"],
+  theta = coef(fit)["ma1"],
+  sigma = sqrt(fit$sigma2)
+) + mu)
+
+# Summaries per horizon
+mean_fc <- rowMeans(paths)
+lower   <- apply(paths, 1, quantile, probs = 0.05)
+upper   <- apply(paths, 1, quantile, probs = 0.95)
+
+
+
+```
+
+```{r echo=FALSE}
+forecast_table <- data.frame(
+  Horizon  = 1:H,
+  Actual   = round(test, 3),
+  Mean     = round(mean_fc, 3),
+  Lower_5  = round(lower, 3),
+  Upper_95 = round(upper, 3)
+)
+
+cat("Bootstrap forecasts (B =", B, "paths, 90% prediction interval)\n\n")
+print(head(forecast_table, 10), row.names = FALSE)
+cat("...\n")
+cat(sprintf("\nShare of test points inside the 90%% interval: %.1f%%\n",
+            100 * mean(test >= lower & test <= upper)))
+```
+
+**6.** Plot the results: training data, test data, bootstrap paths, mean forecast, and prediction interval.
+
+```{r ex1-plot}
+n      <- length(sim)
+t_train <- 1:n_train
+t_test  <- (n_train + 1):n
+
+plot(sim, type = "n",
+     ylim = range(sim, paths),
+     xlab = "Time", ylab = "Y",
+     main = "ARMA(1,1): bootstrap forecasts with 90% prediction interval")
+
+# Bootstrap paths (light, transparent)
+matlines(t_test, paths, col = adjustcolor("grey60", alpha.f = 0.08), lty = 1)
+
+# Prediction interval as a shaded band
+polygon(c(t_test, rev(t_test)), c(lower, rev(upper)),
+        col = adjustcolor("steelblue", alpha.f = 0.25), border = NA)
+
+# Data
+lines(t_train, train, col = "black", lwd = 1.5)
+lines(t_test,  test,  col = "darkorange", lwd = 1.5)
+
+# Mean forecast and interval bounds
+lines(t_test, mean_fc, col = "blue", lwd = 2)
+lines(t_test, lower,   col = "steelblue", lty = 2)
+lines(t_test, upper,   col = "steelblue", lty = 2)
+
+abline(v = n_train + 0.5, lty = 3, col = "grey40")
+
+legend("topleft", bty = "n", cex = 0.8,
+       legend = c("Training data", "Test data", "Bootstrap paths",
+                  "Mean forecast", "90% prediction interval"),
+       col = c("black", "darkorange", "grey60", "blue", "steelblue"),
+       lty = c(1, 1, 1, 1, 2), lwd = c(1.5, 1.5, 1, 2, 1))
+```
+
+**7.** Evaluate forecast accuracy:
+
+- Compute the RMSE of the mean forecast and of the upper quantile forecast.
+- Compute the quantile score for the mean forecast and for the upper quantile forecast.
+
+```{r ex1-evaluate}
+# Helper functions
+rmse <- function(y, f) sqrt(mean((y - f)^2))
+
+quantile_score <- function(y, q, alpha) {
+  mean(ifelse(y < q, (alpha - 1) * (y - q), alpha * (y - q)))
+}
+
+alpha <- 0.95  # level of the upper quantile
+
+# RMSE
+rmse_mean  <- rmse(test, mean_fc)
+rmse_upper <- rmse(test, upper)
+
+# Quantile score (alpha = 0.95), averaged over the test horizon
+qs_mean  <- quantile_score(test, mean_fc, alpha)
+qs_upper <- quantile_score(test, upper,   alpha)
+
+scores <- data.frame(
+  Forecast       = c("Mean", "Upper quantile (95%)"),
+  RMSE           = c(rmse_mean, rmse_upper),
+  Quantile_score = c(qs_mean, qs_upper)
+)
+print(scores, row.names = FALSE, digits = 4)
+```
+
+**8.** Report the obtained scores.
+
+> **Answer:**
+
+# Exercise 2. Simulation Study: Effect of Model Misspecification
+
+In this exercise, you will study how model misspecification impacts forecasting performance. You will conduct a Monte Carlo simulation where the data is generated from an autoregressive process of order 2 (AR(2)), while both AR(1) and AR(2) models are estimated and used to produce forecasts. The performance of these forecasts will then be evaluated and compared.
+
+**1.** Generate a function `simulate_ar2` that takes as inputs starting values for $Y_1$ (`Y1`), $Y_0$ (`Y0`), the length of the series `N`, and parameters `phi1`, `phi2`, `sigma`, and returns a simulated series from an AR(2) process of length `N`.
+
+```{r ex2-simulate-function}
+
+simulate_ar2 <- function(Y1, Y0, N, phi1, phi2, sigma){
+  y <- numeric(N + 2)
+  y[1] <- Y0   # Y_0
+  y[2] <- Y1   # Y_1 (most recent starting value)
+
+  for (t in 3:(N + 2)){
+    y[t] <- phi1 * y[t - 1] + phi2 * y[t - 2] + rnorm(1, mean = 0, sd = sigma)
+  }
+
+  y[-(1:2)]  # drop the two starting values, return N simulated values
+}
+
+```
+
+**2.** Use this function to generate $B = 500$ independent replications of time series of length $N = 500$ from an AR(2) process with starting values $Y_1 = 0$, $Y_0 = 0$ and parameters $\phi_1 = 0.9$, $\phi_2 = -0.8$, and innovation standard deviation $\sigma_\varepsilon = 0.01$.
+
+```{r ex2-generate-replications}
+
+set.seed(123)
+
+B <- 500
+N <- 500
+
+ar2_sims <- replicate(B, simulate_ar2(
+  Y1    = 0,
+  Y0    = 0,
+  N     = N,
+  phi1  = 0.9,
+  phi2  = -0.8,
+  sigma = 0.01
+))
+
+print(dim(ar2_sims))  # 500 x 500: rows = time, columns = replications
+```
+
+**3.** For each replication:
+
+- Split the series into a training set (70%) and a test set (30%).
+- Fit two competing models on the training set:
+  - An AR(1) model.
+  - An AR(2) model.
+- Produce forecasts over the test horizon with both models, including the mean forecast and the 80% predicted quantile.
+- Compute the following forecast evaluation metrics for each model:
+  - Root Mean Squared Error (RMSE).
+  - Mean Absolute Error (MAE).
+  - Quantile score for the 80% predicted quantile, defined as
+    $$  QS_\alpha\left(Y_{T+h}, \hat{Q}_{\alpha,T+h}\right) =
+      \begin{cases}
+      (\alpha - 1)\left(Y_{T+h} - \hat{Q}_{\alpha,T+h}\right) & \text{if } Y_{T+h} < \hat{Q}_{\alpha,T+h} \\
+      \alpha\left(Y_{T+h} - \hat{Q}_{\alpha,T+h}\right) & \text{if } Y_{T+h} \geq \hat{Q}_{\alpha,T+h}
+      \end{cases}
+      $$ where $\alpha = 0.8$, $Y_{T+h}$ is the observed value at time $T+h$ and $\hat{Q}_{\alpha,T+h}$ is the forecasted quantile.
+  - Average the quantile scores across the test horizon and define the mean quantile score as
+    $$  \overline{QS}_\alpha = \frac{1}{H} \sum_{j=1}^{H} QS_\alpha\left(Y_{T+j}, \hat{Q}_{\alpha,T+j}\right),
+      $$ where $H$ denotes the size of the evaluation (test) horizon.
+
+```{r ex2-replication-loop}
+mae <- function(y, f) mean(abs(y - f))
+# rmse() and quantile_score() are reused from Exercise 1
+
+alpha   <- 0.8
+n_train <- floor(0.7 * N)
+H       <- N - n_train
+
+results <- data.frame(
+  rep   = rep(1:B, each = 2),
+  model = rep(c("AR(1)", "AR(2)"), times = B),
+  RMSE  = NA, MAE = NA, QS = NA
+)
+
+for (b in 1:B) {
+  y     <- ar2_sims[, b]
+  train <- y[1:n_train]
+  test  <- y[(n_train + 1):N]
+
+  for (p in 1:2) {
+    fit <- arima(train, order = c(p, 0, 0))
+    fc  <- predict(fit, n.ahead = H)
+
+    mean_fc <- as.numeric(fc$pred)
+    q80     <- mean_fc + qnorm(alpha) * as.numeric(fc$se)  # 80% quantile
+
+    row <- 2 * (b - 1) + p
+    results$RMSE[row] <- rmse(test, mean_fc)
+    results$MAE[row]  <- mae(test, mean_fc)
+    results$QS[row]   <- quantile_score(test, q80, alpha)  # mean QS over H
+  }
+}
+
+
+```
+
+**4.** Collect the results (RMSE, MAE, $\overline{QS}_{0.8}$) from all $B$ replications for both models.
+
+```{r ex2-collect-results}
+head(results)
+```
+
+**5.** Compare the performance of AR(1) vs. AR(2) using boxplots for each metric:
+
+- RMSE.
+- MAE.
+- Mean Quantile score.
+
+```{r ex2-boxplots}
+par(mfrow = c(1, 3))
+
+boxplot(RMSE ~ model, data = results,
+        main = "RMSE", ylab = "RMSE", xlab = "",
+        col = c("tomato", "steelblue"))
+
+boxplot(MAE ~ model, data = results,
+        main = "MAE", ylab = "MAE", xlab = "",
+        col = c("tomato", "steelblue"))
+
+boxplot(QS ~ model, data = results,
+        main = expression("Mean quantile score (" * alpha * " = 0.8)"),
+        ylab = "Mean QS", xlab = "",
+        col = c("tomato", "steelblue"))
+
+par(mfrow = c(1, 1))
+
+# Average of each metric per model, for reference
+aggregate(cbind(RMSE, MAE, QS) ~ model, data = results, FUN = mean)
+```
+
+**6.** Interpret the results and discuss how model misspecification (fitting AR(1) to AR(2) data) affects predictive performance.
+
+> **Answer:**
+
+The AR(2) does slightly better on all three metrics, but the gain is small relative to the variation across replications. With a 150-step horizon, both models’ forecasts quickly settle at the mean, so the AR(1)’s misspecification (it can’t capture the oscillation from φ₂ = −0.8) only costs accuracy at the first few horizons and gets diluted over the rest.
