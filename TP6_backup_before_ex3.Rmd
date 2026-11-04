@@ -1,0 +1,536 @@
+---
+title: "Practical 6 — AR(p), MA(q) and ARMA(p,q) models"
+subtitle: "Forecasting with Applications in Business (S411031) — Prof. Jeffrey Näf"
+author: "Edouard"
+date: "Fall Semester 2026"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r libraries}
+library(fpp3)       # tsibble, fable, feasts, ggplot2, dplyr, tidyr...
+library(tidyverse)
+library(MASS)       # mvrnorm / multivariate normal utilities
+library(mvtnorm)    # dmvnorm for the bivariate density of (Y1, Y2)
+```
+
+# Exercise 1
+
+Consider an AR(2) model defined by:
+
+$$Y_t = \phi_1 Y_{t-1} + \phi_2 Y_{t-2} + \varepsilon_t$$
+
+where $\varepsilon_t \overset{i.i.d.}{\sim} \mathcal{N}(0, \sigma^2)$ are independent white noise errors.
+
+### 1.1
+
+Derive expressions for the autocovariance $\gamma(0)$, $\gamma(1)$, and $\gamma(2)$ in terms of $\phi_1$, $\phi_2$, and $\sigma^2$.
+
+*Hint:* You should obtain:
+
+$$\gamma(0) = \frac{\sigma^2 (1 - \phi_2)}{1 - \phi_2 - \phi_1^2 (1 + \phi_2) - \phi_2^2 + \phi_2^3}$$
+
+$$\gamma(1) = \frac{\phi_1}{1 - \phi_2} \left( \frac{\sigma^2 (1 - \phi_2)}{1 - \phi_2 - \phi_1^2 (1 + \phi_2) - \phi_2^2 + \phi_2^3} \right)$$
+
+$$\gamma(2) = \left( \frac{\sigma^2 (1 - \phi_2)}{1 - \phi_2 - \phi_1^2 (1 + \phi_2) - \phi_2^2 + \phi_2^3} \right) \left( \frac{\phi_1^2 + (1 - \phi_2)\phi_2}{1 - \phi_2} \right)$$
+
+**Answer:**
+
+### 1.2
+
+Write an R function that computes the theoretical autocovariances $\gamma(0)$, $\gamma(1)$, and $\gamma(2)$ using your derived formulas.
+
+```{r ex1-2}
+autocov_0 <- function(phi_1, phi_2, var) {
+  den <- 1- phi_2 - phi_1**2 *(1+phi_2) - phi_2**2 + phi_2**3
+  num <- var * (1 - phi_2)
+  return(num/den)
+}
+
+autocov_1 <- function(phi_1, phi_2, var) {
+  den <- 1- phi_2 - phi_1**2 *(1+phi_2) - phi_2**2 + phi_2**3
+  num <- var * (1 - phi_2)
+  term <- phi_1 / (1 - phi_2)
+  return(term * (num/den))
+}
+
+autocov_2 <- function(phi_1, phi_2, var) {
+  den <- 1- phi_2 - phi_1**2 *(1+phi_2) - phi_2**2 + phi_2**3
+  num <- var * (1 - phi_2)
+  term <- ((phi_1**2+(1-phi_2)*phi_2)/(1-phi_2))
+  return(term * (num/den))
+}
+
+
+```
+
+### 1.3
+
+Using the following parameters: $\phi_1 = 0.4$, $\phi_2 = 0.2$, $\sigma = 5$.
+
+**(a)** Generate $M = 1000$ time series of length $n = 1000$ using `arima.sim()`.
+
+```{r ex1-3a}
+set.seed(123)
+
+phi_1 <- 0.4
+phi_2 <- 0.2
+sigma <- 5
+M <- 1000
+n <- 1000
+
+# Each column is one simulated series (n x M matrix)
+sims <- replicate(
+  M,
+  as.numeric(arima.sim(model = list(ar = c(phi_1, phi_2)), n = n, sd = sigma))
+)
+
+dim(sims)  # 1000 x 1000
+
+```
+
+**(b)** For each simulated series, compute the empirical autocovariances for lags 0, 1, and 2.
+
+```{r ex1-3b}
+emp_auto_cov <- apply(sims, 2, function(x)
+  as.numeric(acf(x, lag.max = 2, type = "covariance", plot = FALSE)$acf))
+# 3 x M matrix: rows = lags 0, 1, 2
+
+```
+
+**(c)** Create side-by-side boxplots comparing the empirical distributions to the theoretical values of the autocovariances for lag $h = \{0, 1, 2\}$.
+
+```{r ex1-3c}
+theo <- c(
+  autocov_0(phi_1, phi_2, sigma^2),
+  autocov_1(phi_1, phi_2, sigma^2),
+  autocov_2(phi_1, phi_2, sigma^2)
+)
+
+emp_df <- tibble(
+  lag   = factor(rep(paste0("h = ", 0:2), times = M)),
+  value = as.vector(emp_auto_cov)
+)
+
+theo_df <- tibble(
+  lag   = factor(paste0("h = ", 0:2)),
+  value = theo
+)
+
+ggplot(emp_df, aes(x = lag, y = value)) +
+  geom_boxplot(fill = "lightblue") +
+  geom_point(data = theo_df, colour = "red", size = 4, shape = 18) +
+  labs(
+    title = "Empirical vs theoretical autocovariances, AR(2)",
+    subtitle = "Boxplots: 1000 simulated series (n = 1000); red diamonds: theoretical values",
+    x = "Lag", y = "Autocovariance"
+  ) +
+  theme_minimal()
+
+
+```
+
+# Exercise 2
+
+Consider an AR(2) model defined by:
+
+$$Y_t = \phi_1 Y_{t-1} + \phi_2 Y_{t-2} + \varepsilon_t$$
+
+where $\varepsilon_t \overset{i.i.d.}{\sim} \mathcal{N}(0, \sigma^2)$ are independent white noise errors.
+
+We will compare four parameter estimation methods through a Monte Carlo simulation.
+
+### 2.1
+
+Consider the full likelihood for that model. Following the approach from the slides, the full likelihood includes the unconditional density of $(Y_1, Y_2)$ under stationarity:
+
+$$L(\eta) = \prod_{t=1}^{T} f(Y_t \mid \eta) = f(Y_1, Y_2) \times \prod_{t=3}^{T} f(Y_t \mid Y_{t-1}, Y_{t-2})$$
+
+where $\eta = [\phi_1, \phi_2, \sigma^2]^\top$, $(Y_1, Y_2)$ follows a multivariate normal distribution with a covariance matrix of dimension $2 \times 2$ with its entries corresponding to $\gamma(0)$ and $\gamma(1)$ derived in Exercise 1, and $f$ is the density function of the Gaussian distribution. Derive the log-likelihood for that model.
+
+**Answer:**
+
+**Density of** $(Y_1, Y_2)$. Under stationarity with zero mean, $(Y_1, Y_2)^\top \sim \mathcal{N}_2(\mathbf{0}, \Gamma)$ with
+
+$$\Gamma = \begin{pmatrix} \gamma(0) & \gamma(1) \\ \gamma(1) & \gamma(0) \end{pmatrix},
+\qquad |\Gamma| = \gamma(0)^2 - \gamma(1)^2,
+\qquad \Gamma^{-1} = \frac{1}{\gamma(0)^2 - \gamma(1)^2}
+\begin{pmatrix} \gamma(0) & -\gamma(1) \\ -\gamma(1) & \gamma(0) \end{pmatrix}.$$
+
+So, writing $\mathbf{y}_{1:2} = (Y_1, Y_2)^\top$,
+
+$$\log f(Y_1, Y_2) = -\log(2\pi) - \tfrac{1}{2}\log\!\big(\gamma(0)^2 - \gamma(1)^2\big)
+- \frac{\gamma(0) Y_1^2 - 2\gamma(1) Y_1 Y_2 + \gamma(0) Y_2^2}{2\big(\gamma(0)^2 - \gamma(1)^2\big)}.$$
+
+**Conditional densities.** For $t \geq 3$, since $\varepsilon_t \sim \mathcal{N}(0, \sigma^2)$ is independent of the past,
+
+$$Y_t \mid Y_{t-1}, Y_{t-2} \sim \mathcal{N}\big(\phi_1 Y_{t-1} + \phi_2 Y_{t-2},\ \sigma^2\big),$$
+
+$$\log f(Y_t \mid Y_{t-1}, Y_{t-2}) = -\tfrac{1}{2}\log(2\pi\sigma^2)
+- \frac{(Y_t - \phi_1 Y_{t-1} - \phi_2 Y_{t-2})^2}{2\sigma^2}.$$
+
+**Full log-likelihood.** Taking the log of the product gives a sum:
+
+$$\begin{aligned}
+\ell(\eta) = \log L(\eta) = {} & -\log(2\pi) - \tfrac{1}{2}\log\!\big(\gamma(0)^2 - \gamma(1)^2\big)
+- \frac{\gamma(0) Y_1^2 - 2\gamma(1) Y_1 Y_2 + \gamma(0) Y_2^2}{2\big(\gamma(0)^2 - \gamma(1)^2\big)} \\
+& - \frac{T-2}{2}\log(2\pi\sigma^2)
+- \frac{1}{2\sigma^2}\sum_{t=3}^{T} \big(Y_t - \phi_1 Y_{t-1} - \phi_2 Y_{t-2}\big)^2,
+\end{aligned}$$
+
+where $\gamma(0)$ and $\gamma(1)$ are the functions of $(\phi_1, \phi_2, \sigma^2)$ from Exercise 1. This is only defined in the stationary region $\phi_1 + \phi_2 < 1$, $\phi_2 - \phi_1 < 1$, $|\phi_2| < 1$.
+
+### 2.2
+
+Implement a function that computes the full log-likelihood using the results from Exercise 1 and from the previous point.
+
+```{r ex2-2}
+full_loglik <- function(par, y) {
+  phi_1  <- par[1]
+  phi_2  <- par[2]
+  sigma2 <- par[3]
+  T <- length(y)
+
+  # Outside the stationary region (or sigma2 <= 0) the likelihood is not defined
+  if (sigma2 <= 0 || phi_1 + phi_2 >= 1 || phi_2 - phi_1 >= 1 || abs(phi_2) >= 1) {
+    return(-1e10)
+  }
+
+  g0 <- autocov_0(phi_1, phi_2, sigma2)
+  g1 <- autocov_1(phi_1, phi_2, sigma2)
+  det_G <- g0^2 - g1^2
+
+  # Part 1: bivariate normal density of (Y1, Y2)
+  ll_init <- -log(2 * pi) - 0.5 * log(det_G) -
+    (g0 * y[1]^2 - 2 * g1 * y[1] * y[2] + g0 * y[2]^2) / (2 * det_G)
+
+  # Part 2: conditional densities for t = 3, ..., T
+  resid <- y[3:T] - phi_1 * y[2:(T - 1)] - phi_2 * y[1:(T - 2)]
+  ll_cond <- -(T - 2) / 2 * log(2 * pi * sigma2) - sum(resid^2) / (2 * sigma2)
+
+  ll_init + ll_cond
+}
+```
+
+### 2.3
+
+Derive the conditional log-likelihood where we condition on the first two observations and that treats $(Y_1, Y_2)$ as fixed where the likelihood function is defined as:
+
+$$L(\eta) = \prod_{t=3}^{T} f(Y_t \mid Y_{t-1}, Y_{t-2}; \eta)$$
+
+**Answer:**
+
+For $t \geq 3$, given $Y_{t-1}$ and $Y_{t-2}$, the only random part of $Y_t$ is $\varepsilon_t \sim \mathcal{N}(0, \sigma^2)$, so
+
+$$Y_t \mid Y_{t-1}, Y_{t-2} \sim \mathcal{N}\big(\phi_1 Y_{t-1} + \phi_2 Y_{t-2},\ \sigma^2\big),$$
+
+$$f(Y_t \mid Y_{t-1}, Y_{t-2}; \eta) = \frac{1}{\sqrt{2\pi\sigma^2}}
+\exp\!\left( -\frac{(Y_t - \phi_1 Y_{t-1} - \phi_2 Y_{t-2})^2}{2\sigma^2} \right).$$
+
+Treating $(Y_1, Y_2)$ as fixed and taking the log of the product:
+
+$$\ell_c(\eta) = \sum_{t=3}^{T} \log f(Y_t \mid Y_{t-1}, Y_{t-2}; \eta)
+= -\frac{T-2}{2}\log(2\pi) - \frac{T-2}{2}\log(\sigma^2)
+- \frac{1}{2\sigma^2}\sum_{t=3}^{T}\big(Y_t - \phi_1 Y_{t-1} - \phi_2 Y_{t-2}\big)^2.$$
+
+This is the full log-likelihood from 2.1 without the $\log f(Y_1, Y_2)$ term. It no longer involves $\gamma(0)$ and $\gamma(1)$, so it does not require stationarity. For fixed $\sigma^2$, maximizing it in $(\phi_1, \phi_2)$ is the same as minimizing the sum of squared residuals, so the conditional MLE of $\boldsymbol{\phi}$ coincides with the OLS estimator of 2.5.
+
+### 2.4
+
+Implement a function that computes the conditional log-likelihood.
+
+```{r ex2-4}
+
+cond_loglik <- function(par, y) {
+  phi_1  <- par[1]
+  phi_2  <- par[2]
+  sigma2 <- par[3]
+  T <- length(y)
+
+  if (sigma2 <= 0) return(-1e10)
+
+  resid <- y[3:T] - phi_1 * y[2:(T - 1)] - phi_2 * y[1:(T - 2)]
+  -(T - 2) / 2 * log(2 * pi * sigma2) - sum(resid^2) / (2 * sigma2)
+}
+```
+
+### 2.5
+
+Following equations (7)–(10) from the slides, implement the OLS estimator for the AR(2) model. Set up the least squares problem as $\mathbf{Y} = F\boldsymbol{\phi} + \boldsymbol{\varepsilon}$ where:
+
+- $\mathbf{Y} = (Y_3, Y_4, \dots, Y_T)^\top$ is the $(T-2) \times 1$ response vector
+- $F = \begin{pmatrix} Y_2 & Y_1 \\ Y_3 & Y_2 \\ \vdots & \vdots \\ Y_{T-1} & Y_{T-2} \end{pmatrix}$ is the $(T-2) \times 2$ design matrix
+- $\boldsymbol{\phi} = (\phi_1, \phi_2)^\top$ is the parameter vector of dimension $2 \times 1$.
+
+Show that the OLS estimator is given by equation (10): $\hat{\boldsymbol{\phi}} = (F^\top F)^{-1} F^\top \mathbf{Y}$, and estimate $\hat{\sigma}^2$ using the residual variance.
+
+*Hint:* Use the fact that we can take derivatives of matrices, similarly as we do with numbers. For instance, for a matrix $A$, $\partial(\boldsymbol{\phi}^\top A \boldsymbol{\phi}) / \partial \boldsymbol{\phi} = (A + A^\top)\boldsymbol{\phi}$ and $\partial(A\boldsymbol{\phi}) / \partial \boldsymbol{\phi} = A$. (See the [Matrix Cookbook](https://www.math.uwaterloo.ca/~hwolkowi/matrixcookbook.pdf).)
+
+**Derivation:** The OLS estimator minimizes the sum of squared residuals:
+
+$$S(\boldsymbol{\phi}) = (\mathbf{Y} - F\boldsymbol{\phi})^\top (\mathbf{Y} - F\boldsymbol{\phi}).$$
+
+**Expand.** Using $(F\boldsymbol{\phi})^\top = \boldsymbol{\phi}^\top F^\top$:
+
+$$S(\boldsymbol{\phi}) = \mathbf{Y}^\top\mathbf{Y} - \mathbf{Y}^\top F\boldsymbol{\phi} - \boldsymbol{\phi}^\top F^\top \mathbf{Y} + \boldsymbol{\phi}^\top F^\top F \boldsymbol{\phi}.$$
+
+The two middle terms are scalars and transposes of each other, hence equal:
+
+$$S(\boldsymbol{\phi}) = \mathbf{Y}^\top\mathbf{Y} - 2\,\boldsymbol{\phi}^\top F^\top \mathbf{Y} + \boldsymbol{\phi}^\top F^\top F \boldsymbol{\phi}.$$
+
+**Differentiate.** Using $\partial(\boldsymbol{\phi}^\top \mathbf{a})/\partial\boldsymbol{\phi} = \mathbf{a}$ and $\partial(\boldsymbol{\phi}^\top A \boldsymbol{\phi})/\partial\boldsymbol{\phi} = (A + A^\top)\boldsymbol{\phi}$, with $A = F^\top F$ symmetric (since $(F^\top F)^\top = F^\top F$):
+
+$$\frac{\partial S}{\partial \boldsymbol{\phi}} = \mathbf{0} - 2F^\top\mathbf{Y} + 2F^\top F\boldsymbol{\phi}.$$
+
+**Set to zero (normal equations).**
+
+$$-2F^\top\mathbf{Y} + 2F^\top F\hat{\boldsymbol{\phi}} = \mathbf{0}
+\quad\Longleftrightarrow\quad
+F^\top F\hat{\boldsymbol{\phi}} = F^\top\mathbf{Y}.$$
+
+Assuming $F^\top F$ is invertible (the columns of $F$ are not collinear):
+
+$$\hat{\boldsymbol{\phi}} = (F^\top F)^{-1} F^\top \mathbf{Y}. \tag{10}$$
+
+This is a minimum because the Hessian $\partial^2 S / \partial\boldsymbol{\phi}\,\partial\boldsymbol{\phi}^\top = 2F^\top F$ is positive definite.
+
+**Error variance.** With residuals $\hat{\boldsymbol{\varepsilon}} = \mathbf{Y} - F\hat{\boldsymbol{\phi}}$:
+
+$$\hat{\sigma}^2 = \frac{1}{T - 2}\,\hat{\boldsymbol{\varepsilon}}^\top \hat{\boldsymbol{\varepsilon}}
+= \frac{1}{T-2}\sum_{t=3}^{T}\big(Y_t - \hat\phi_1 Y_{t-1} - \hat\phi_2 Y_{t-2}\big)^2.$$
+
+```{r ex2-5}
+ols_ar2 <- function(y) {
+  T <- length(y)
+
+  Y <- y[3:T]                             # (T-2) x 1 response
+  F <- cbind(y[2:(T - 1)], y[1:(T - 2)])  # (T-2) x 2 design: [Y_{t-1}, Y_{t-2}]
+
+  phi_hat <- solve(t(F) %*% F) %*% t(F) %*% Y   # (F'F)^{-1} F'Y
+
+  resid <- Y - F %*% phi_hat
+  sigma2_hat <- sum(resid^2) / (T - 2)
+
+  c(phi_1 = phi_hat[1], phi_2 = phi_hat[2], sigma2 = sigma2_hat)
+}
+
+```
+
+### 2.6
+
+Generate $B = 500$ time series from the AR(2) model with parameters $\phi_1 = 0.9$, $\phi_2 = -0.7$, $\sigma = 5$, and sample size $n = 30$. For each generated series, obtain $\hat{\phi}_1, \hat{\phi}_2, \hat{\sigma}^2$ using:
+
+- Conditional likelihood maximization (using `optim`)
+- Full likelihood maximization (using `optim`)
+- Least squares estimation
+- Built-in `fable::ARIMA` function
+
+```{r ex2-6}
+set.seed(42)
+
+B <- 500
+n <- 30
+phi_true   <- c(0.9, -0.7)
+sigma_true <- 5
+
+# n x B matrix: each column is one simulated series
+sims2 <- replicate(
+  B,
+  as.numeric(arima.sim(model = list(ar = phi_true), n = n, sd = sigma_true))
+)
+
+# Generic optim wrapper: maximizes a log-likelihood of the form loglik(par, y)
+fit_optim <- function(y, loglik) {
+  start <- c(0, 0, var(y))   # (phi_1, phi_2, sigma2): stationary start
+  optim(start, loglik, y = y,
+        control = list(fnscale = -1, maxit = 2000))$par   # fnscale = -1 -> maximize
+}
+
+# 1) Conditional likelihood
+est_cond <- t(apply(sims2, 2, fit_optim, loglik = cond_loglik))
+
+# 2) Full likelihood
+est_full <- t(apply(sims2, 2, fit_optim, loglik = full_loglik))
+
+# 3) Least squares
+est_ols <- t(apply(sims2, 2, ols_ar2))
+
+colnames(est_cond) <- colnames(est_full) <- colnames(est_ols) <- c("phi_1", "phi_2", "sigma2")
+
+# 4) fable::ARIMA — fit all series at once using a keyed tsibble
+sims_ts <- tibble(
+  sim = rep(1:B, each = n),
+  t   = rep(1:n, times = B),
+  y   = as.vector(sims2)
+) |>
+  as_tsibble(index = t, key = sim)
+
+fits <- sims_ts |>
+  model(arima = ARIMA(y ~ 0 + pdq(2, 0, 0) + PDQ(0, 0, 0)))
+
+est_fable <- tidy(fits) |>
+  dplyr::select(sim, term, estimate) |>
+  pivot_wider(names_from = term, values_from = estimate) |>
+  left_join(glance(fits) |> dplyr::select(sim, sigma2), by = "sim") |>
+  arrange(sim) |>
+  transmute(phi_1 = ar1, phi_2 = ar2, sigma2)
+
+# Combine everything into one long table (needed for the boxplots in 2.7)
+results <- bind_rows(
+  as_tibble(est_cond) |> mutate(method = "Conditional ML"),
+  as_tibble(est_full) |> mutate(method = "Full ML"),
+  as_tibble(est_ols)  |> mutate(method = "OLS"),
+  est_fable           |> mutate(method = "fable::ARIMA")
+)
+
+results |>
+  group_by(method) |>
+  summarise(across(c(phi_1, phi_2, sigma2), mean), n = n())
+```
+
+### 2.7
+
+Create boxplots showing the distribution of the four estimators for each parameter ($\phi_1, \phi_2, \sigma^2$), with horizontal lines indicating the true parameter values.
+
+```{r ex2-7}
+true_vals <- tibble(
+  parameter = c("phi[1]", "phi[2]", "sigma^2"),
+  value     = c(phi_true, sigma_true^2)
+)
+
+results |>
+  pivot_longer(c(phi_1, phi_2, sigma2), names_to = "parameter", values_to = "estimate") |>
+  mutate(parameter = recode(parameter,
+                            phi_1 = "phi[1]", phi_2 = "phi[2]", sigma2 = "sigma^2")) |>
+  ggplot(aes(x = method, y = estimate, fill = method)) +
+  geom_boxplot(outlier.size = 0.8) +
+  geom_hline(data = true_vals, aes(yintercept = value),
+             colour = "red", linetype = "dashed", linewidth = 0.8) +
+  facet_wrap(~ parameter, scales = "free_y", labeller = label_parsed) +
+  labs(
+    title = "AR(2) estimators: 500 simulations, n = 30",
+    subtitle = "Red dashed line: true parameter value",
+    x = NULL, y = "Estimate"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 30, hjust = 1))
+
+```
+
+### 2.8
+
+In which situations would you expect the full likelihood to give better results than the conditional likelihood?
+
+**Answer:**
+The full likelihood should do better than the conditional likelihood when:
+
+1. **The sample is small.** The conditional likelihood throws away the information in $(Y_1, Y_2)$.
+   With $T = 30$ that is about 7% of the data, which matters. With large $T$ the first two
+   observations are negligible and both estimators are asymptotically equivalent.
+
+2. **The model order is high.** An AR($p$) conditional likelihood drops the first $p$ observations,
+   so the loss grows with $p$ relative to $T$. With MA terms, the conditional approach also
+   has to set the unobserved initial errors to zero, which adds bias.
+
+3. **The process is close to the stationarity boundary.** The full likelihood contains
+   $f(Y_1, Y_2)$, whose variance $\gamma(0)$ explodes as the roots approach the unit circle.
+   This term penalizes near-non-stationary values and keeps estimates in the stationary region.
+   The conditional likelihood (and OLS) has no such constraint and can return non-stationary estimates.
+
+4. **The stationarity and Gaussian assumptions actually hold.** The extra term is only valid if
+   $(Y_1, Y_2)$ really comes from the stationary distribution. If the series starts from a fixed
+   value, is non-stationary, or is misspecified, that term adds wrong information and the
+   conditional likelihood is more robust.
+
+**In our simulation**, conditional ML and OLS give identical $\hat\phi$ boxplots, as expected from
+2.5. Full ML (and `fable::ARIMA`, which also maximises the exact likelihood) is centred slightly
+closer to the true $\phi_1 = 0.9$ and $\phi_2 = -0.7$. The clearest gain is for $\sigma^2$: the
+conditional/OLS estimates have a median around 23, underestimating the true value of 25, while full
+ML is less biased. The differences are modest because $(0.9, -0.7)$ lies well inside the stationary
+region; they would grow for smaller $T$ or parameters closer to the boundary.
+
+
+# Exercise 3
+
+Use R to simulate and plot some data from simple ARMA models.
+
+### 3.1
+
+Use the following R code to generate data from an AR(1) model with $\phi_1 = 0.6$ and $\sigma^2 = 1$. The process starts with $y_1 = 0$. Try several values of $\phi_1$.
+
+```{r ex3-1-given, eval=FALSE}
+y <- numeric(100)
+e <- rnorm(100)
+for (i in 2:100) {
+  y[i] <- 0.6 * y[i - 1] + e[i]
+}
+sim <- tsibble(idx = seq_len(100), y = y, index = idx)
+```
+
+```{r ex3-1}
+
+```
+
+### 3.2
+
+Produce a time plot for the series. How does the plot change as you change $\phi_1$?
+
+```{r ex3-2}
+
+```
+
+**Answer:**
+
+### 3.3
+
+Write your own code to generate data from an MA(1) model with $\theta_1 = 0.6$ and $\sigma^2 = 1$.
+
+```{r ex3-3}
+
+```
+
+### 3.4
+
+Produce a time plot for the series. How does the plot change as you change $\theta_1$?
+
+```{r ex3-4}
+
+```
+
+**Answer:**
+
+### 3.5
+
+Generate data from an ARMA(1,1) model with $\phi_1 = 0.6$, $\theta_1 = 0.6$ and $\sigma^2 = 1$.
+
+```{r ex3-5}
+
+```
+
+### 3.6
+
+Generate data from an AR(2) model with $\phi_1 = -0.8$, $\phi_2 = 0.3$ and $\sigma^2 = 1$. Explain why this series appears not-stationary.
+
+```{r ex3-6}
+
+```
+
+**Answer:**
+
+### 3.7
+
+Plot the latter two series and compare them.
+
+```{r ex3-7}
+
+```
+
+**Answer:**

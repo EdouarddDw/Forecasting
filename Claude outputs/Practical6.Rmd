@@ -1,0 +1,272 @@
+---
+title: "Practical 6 — AR(p), MA(q) and ARMA(p,q) models"
+subtitle: "Forecasting with Applications in Business (S411031) — Prof. Jeffrey Näf"
+author: "Edouard"
+date: "Fall Semester 2026"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r libraries}
+library(fpp3)       # tsibble, fable, feasts, ggplot2, dplyr, tidyr...
+library(tidyverse)
+library(MASS)       # mvrnorm / multivariate normal utilities
+library(mvtnorm)    # dmvnorm for the bivariate density of (Y1, Y2)
+```
+
+# Exercise 1
+
+Consider an AR(2) model defined by:
+
+$$
+Y_t = \phi_1 Y_{t-1} + \phi_2 Y_{t-2} + \varepsilon_t
+$$
+
+where $\varepsilon_t \overset{i.i.d.}{\sim} \mathcal{N}(0, \sigma^2)$ are independent white noise errors.
+
+### 1.1
+
+Derive expressions for the autocovariance $\gamma(0)$, $\gamma(1)$, and $\gamma(2)$ in terms of $\phi_1$, $\phi_2$, and $\sigma^2$.
+
+*Hint:* You should obtain:
+
+$$
+\gamma(0) = \frac{\sigma^2 (1 - \phi_2)}{1 - \phi_2 - \phi_1^2 (1 + \phi_2) - \phi_2^2 + \phi_2^3}
+$$
+
+$$
+\gamma(1) = \frac{\phi_1}{1 - \phi_2} \left( \frac{\sigma^2 (1 - \phi_2)}{1 - \phi_2 - \phi_1^2 (1 + \phi_2) - \phi_2^2 + \phi_2^3} \right)
+$$
+
+$$
+\gamma(2) = \left( \frac{\sigma^2 (1 - \phi_2)}{1 - \phi_2 - \phi_1^2 (1 + \phi_2) - \phi_2^2 + \phi_2^3} \right) \left( \frac{\phi_1^2 + (1 - \phi_2)\phi_2}{1 - \phi_2} \right)
+$$
+
+**Answer:**
+
+
+
+### 1.2
+
+Write an R function that computes the theoretical autocovariances $\gamma(0)$, $\gamma(1)$, and $\gamma(2)$ using your derived formulas.
+
+```{r ex1-2}
+
+```
+
+### 1.3
+
+Using the following parameters: $\phi_1 = 0.4$, $\phi_2 = 0.2$, $\sigma = 5$.
+
+**(a)** Generate $M = 1000$ time series of length $n = 1000$ using `arima.sim()`.
+
+```{r ex1-3a}
+
+```
+
+**(b)** For each simulated series, compute the empirical autocovariances for lags 0, 1, and 2.
+
+```{r ex1-3b}
+
+```
+
+**(c)** Create side-by-side boxplots comparing the empirical distributions to the theoretical values of the autocovariances for lag $h = \{0, 1, 2\}$.
+
+```{r ex1-3c}
+
+```
+
+# Exercise 2
+
+Consider an AR(2) model defined by:
+
+$$
+Y_t = \phi_1 Y_{t-1} + \phi_2 Y_{t-2} + \varepsilon_t
+$$
+
+where $\varepsilon_t \overset{i.i.d.}{\sim} \mathcal{N}(0, \sigma^2)$ are independent white noise errors.
+
+We will compare four parameter estimation methods through a Monte Carlo simulation.
+
+### 2.1
+
+Consider the full likelihood for that model. Following the approach from the slides, the full likelihood includes the unconditional density of $(Y_1, Y_2)$ under stationarity:
+
+$$
+L(\eta) = \prod_{t=1}^{T} f(Y_t \mid \eta) = f(Y_1, Y_2) \times \prod_{t=3}^{T} f(Y_t \mid Y_{t-1}, Y_{t-2})
+$$
+
+where $\eta = [\phi_1, \phi_2, \sigma^2]^\top$, $(Y_1, Y_2)$ follows a multivariate normal distribution with a covariance matrix of dimension $2 \times 2$ with its entries corresponding to $\gamma(0)$ and $\gamma(1)$ derived in Exercise 1, and $f$ is the density function of the Gaussian distribution. Derive the log-likelihood for that model.
+
+**Answer:**
+
+
+
+### 2.2
+
+Implement a function that computes the full log-likelihood using the results from Exercise 1 and from the previous point.
+
+```{r ex2-2}
+
+```
+
+### 2.3
+
+Derive the conditional log-likelihood where we condition on the first two observations and that treats $(Y_1, Y_2)$ as fixed where the likelihood function is defined as:
+
+$$
+L(\eta) = \prod_{t=3}^{T} f(Y_t \mid Y_{t-1}, Y_{t-2}; \eta)
+$$
+
+**Answer:**
+
+
+
+### 2.4
+
+Implement a function that computes the conditional log-likelihood.
+
+```{r ex2-4}
+
+```
+
+### 2.5
+
+Following equations (7)–(10) from the slides, implement the OLS estimator for the AR(2) model. Set up the least squares problem as $\mathbf{Y} = F\boldsymbol{\phi} + \boldsymbol{\varepsilon}$ where:
+
+- $\mathbf{Y} = (Y_3, Y_4, \dots, Y_T)^\top$ is the $(T-2) \times 1$ response vector
+- $F = \begin{pmatrix} Y_2 & Y_1 \\ Y_3 & Y_2 \\ \vdots & \vdots \\ Y_{T-1} & Y_{T-2} \end{pmatrix}$ is the $(T-2) \times 2$ design matrix
+- $\boldsymbol{\phi} = (\phi_1, \phi_2)^\top$ is the parameter vector of dimension $2 \times 1$.
+
+Show that the OLS estimator is given by equation (10): $\hat{\boldsymbol{\phi}} = (F^\top F)^{-1} F^\top \mathbf{Y}$, and estimate $\hat{\sigma}^2$ using the residual variance.
+
+*Hint:* Use the fact that we can take derivatives of matrices, similarly as we do with numbers. For instance, for a matrix $A$, $\partial(\boldsymbol{\phi}^\top A \boldsymbol{\phi}) / \partial \boldsymbol{\phi} = (A + A^\top)\boldsymbol{\phi}$ and $\partial(A\boldsymbol{\phi}) / \partial \boldsymbol{\phi} = A$. (See the [Matrix Cookbook](https://www.math.uwaterloo.ca/~hwolkowi/matrixcookbook.pdf).)
+
+**Derivation:**
+
+
+
+```{r ex2-5}
+
+```
+
+### 2.6
+
+Generate $B = 500$ time series from the AR(2) model with parameters $\phi_1 = 0.9$, $\phi_2 = -0.7$, $\sigma = 5$, and sample size $n = 30$. For each generated series, obtain $\hat{\phi}_1, \hat{\phi}_2, \hat{\sigma}^2$ using:
+
+- Conditional likelihood maximization (using `optim`)
+- Full likelihood maximization (using `optim`)
+- Least squares estimation
+- Built-in `fable::ARIMA` function
+
+```{r ex2-6}
+
+```
+
+### 2.7
+
+Create boxplots showing the distribution of the four estimators for each parameter ($\phi_1, \phi_2, \sigma^2$), with horizontal lines indicating the true parameter values.
+
+```{r ex2-7}
+
+```
+
+### 2.8
+
+In which situations would you expect the full likelihood to give better results than the conditional likelihood?
+
+**Answer:**
+
+
+
+# Exercise 3
+
+Use R to simulate and plot some data from simple ARMA models.
+
+### 3.1
+
+Use the following R code to generate data from an AR(1) model with $\phi_1 = 0.6$ and $\sigma^2 = 1$. The process starts with $y_1 = 0$. Try several values of $\phi_1$.
+
+```{r ex3-1-given, eval=FALSE}
+y <- numeric(100)
+e <- rnorm(100)
+for (i in 2:100) {
+  y[i] <- 0.6 * y[i - 1] + e[i]
+}
+sim <- tsibble(idx = seq_len(100), y = y, index = idx)
+```
+
+```{r ex3-1}
+
+```
+
+### 3.2
+
+Produce a time plot for the series. How does the plot change as you change $\phi_1$?
+
+```{r ex3-2}
+
+```
+
+**Answer:**
+
+
+
+### 3.3
+
+Write your own code to generate data from an MA(1) model with $\theta_1 = 0.6$ and $\sigma^2 = 1$.
+
+```{r ex3-3}
+
+```
+
+### 3.4
+
+Produce a time plot for the series. How does the plot change as you change $\theta_1$?
+
+```{r ex3-4}
+
+```
+
+**Answer:**
+
+
+
+### 3.5
+
+Generate data from an ARMA(1,1) model with $\phi_1 = 0.6$, $\theta_1 = 0.6$ and $\sigma^2 = 1$.
+
+```{r ex3-5}
+
+```
+
+### 3.6
+
+Generate data from an AR(2) model with $\phi_1 = -0.8$, $\phi_2 = 0.3$ and $\sigma^2 = 1$. Explain why this series appears not-stationary.
+
+```{r ex3-6}
+
+```
+
+**Answer:**
+
+
+
+### 3.7
+
+Plot the latter two series and compare them.
+
+```{r ex3-7}
+
+```
+
+**Answer:**
+
+
