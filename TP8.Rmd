@@ -1,0 +1,758 @@
+---
+title: "Practical 8 — Exponential Smoothing"
+subtitle: "Forecasting with Applications in Business (S411031)"
+author: "Edouard"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Packages
+
+```{r packages}
+# Install once if needed:
+# install.packages(c("fpp3", "fpp2", "forecast", "readxl", "tidyverse", "lubridate"))
+
+library(fpp3)       # tsibble, fable, feasts, global_economy, ETS(), etc.
+library(fpp2)       # books data set
+library(forecast)   # ses(), holt(), ets(), autoplot helpers
+library(readxl)     # read Domotic2.xlsx
+library(tidyverse)  # dplyr, ggplot2, tidyr, ...
+library(lubridate)  # date-time handling
+```
+
+------------------------------------------------------------------------
+
+# Exercise 1
+
+In R, work with the package `fpp3` and load the data set `books`. The data set `books` contains the daily sales of paperback and hardcover books at the same store. The task is to forecast the next four days' sales for paperback and hardcover books.
+
+```{r ex1-load}
+books <- books |>
+  as_tsibble() |>
+  rename(Day = index, Type = key, Sales = value)
+
+# View the resulting tsibble
+head(books)
+```
+
+### a. Plot the series and discuss the main features of the data.
+
+```{r ex1a}
+autoplot(books, Sales) +
+  labs(title = "Daily book sales", y = "Sales", x = "Day")
+books_total <- books |>
+  summarise(Sales = sum(Sales))
+
+p <- autoplot(books_total, Sales) +
+  labs(title = "Total daily book sales (Paperback + Hardcover)", y = "Sales", x = "Day")
+p
+
+
+```
+
+*Discussion:* The series covers 60 days and trends upward, from roughly 150–200 at the start to 200–280 by the end. Sales are very volatile from one day to the next, and there’s a noticeable dip around days 30–40 before they recover. There’s no clear seasonality or regular weekly pattern.
+
+### b. Use simple exponential smoothing with the `ses` function (setting `initial="simple"`) and explore different values of α for the paperback series. Record the within-sample SSE for the one-step forecasts. Plot SSE against α and find which value of α works best. What is the effect of α on the forecasts?
+
+```{r ex1b}
+paperback <- books |>
+  filter(Type == 'Paperback') |>
+  pull(Sales) |>
+  ts()
+# SSE of the one-step-ahead forecasts for a grid of alpha values
+alphas <- seq(0.01, 0.99, by = 0.01)
+sse <- sapply(alphas, \(a)
+  sum(residuals(ses(paperback, alpha = a, initial = "simple", h = 4))^2)
+)
+
+best_alpha <- alphas[which.min(sse)]
+best_alpha
+
+# Plot SSE against alpha, with a dashed line at the minimum
+tibble(alpha = alphas, SSE = sse) |>
+  ggplot(aes(alpha, SSE)) +
+  geom_line() +
+  geom_vline(xintercept = best_alpha, linetype = "dashed", colour = "red") +
+  labs(title = "SSE of one-step forecasts vs alpha (Paperback)")
+
+# Effect of alpha on the forecasts: compare a low, the best and a high value
+autoplot(paperback) +
+  autolayer(ses(paperback, alpha = 0.1, initial = "simple", h = 4), PI = FALSE, series = "α = 0.1") +
+  autolayer(ses(paperback, alpha = best_alpha, initial = "simple", h = 4), PI = FALSE, series = paste("α =", best_alpha)) +
+  autolayer(ses(paperback, alpha = 0.9, initial = "simple", h = 4), PI = FALSE, series = "α = 0.9") +
+  labs(y = "Sales", title = "SES forecasts for different α")
+```
+
+*Answer:* The forecast is always a flat line, and α decides where it sits: a small α (0.1) smooths heavily so the forecast stays near the long-run average (\~200), a large α (0.9) puts the weight on the latest observation so it jumps close to the last value (\~241), and α = 0.21 gives the lowest SSE by balancing the two.
+
+### c. Now let `ses` select the optimal value of α. Use this value to generate forecasts for the next four days. Compare your results with 2.
+
+```{r ex1c}
+# Let ses() estimate alpha (initial level still "simple")
+opt_ses <- ses(paperback, initial = "simple", h = 4)
+
+# Estimated alpha vs the grid-search alpha from b
+opt_ses$model$par["alpha"]
+best_alpha
+
+# Four-day forecasts
+opt_ses$mean
+
+# Compare in-sample SSE with the best SSE from the grid
+sum(residuals(opt_ses)^2)
+min(sse)
+
+# Plot the series with the forecasts and prediction intervals
+autoplot(opt_ses) +
+  autolayer(fitted(opt_ses), series = "Fitted") +
+  labs(y = "Sales", title = "SES with optimised α (initial = 'simple')")
+
+```
+
+*Answer:*The estimated α (0.2125) is almost identical to the grid’s 0.21, the SSE values match (36,314 vs 36,315), and both models forecast a flat 210.15 for the next four days. However, SES has no trend term, so it misses the series’ upward movement.
+
+### d. Repeat but with `initial="optimal"`. How much difference does an optimal initial level make?
+
+```{r ex1d}
+opti_ses <- ses(paperback, initial = "optimal", h = 4)
+
+# Table comparing b (grid alpha), c (estimated alpha, simple start) and d (optimal start)
+grid_ses <- ses(paperback, alpha = best_alpha, initial = "simple", h = 4)
+
+tibble(
+  Model   = c("b: grid α, simple", "c: estimated α, simple", "d: estimated α, optimal"),
+  alpha   = c(best_alpha,
+              opt_ses$model$par["alpha"],
+              opti_ses$model$par["alpha"]),
+  l0      = c(paperback[1],
+              paperback[1],
+              opti_ses$model$par["l"]),
+  SSE     = c(sum(residuals(grid_ses)^2),
+              sum(residuals(opt_ses)^2),
+              sum(residuals(opti_ses)^2)),
+  Forecast = c(grid_ses$mean[1], opt_ses$mean[1], opti_ses$mean[1])
+)
+
+# Forecasts from all three models on one plot
+autoplot(paperback) +
+  autolayer(grid_ses, PI = FALSE, series = "b: grid α") +
+  autolayer(opt_ses,  PI = FALSE, series = "c: estimated α, simple") +
+  autolayer(opti_ses, PI = FALSE, series = "d: estimated α, optimal") +
+  labs(y = "Sales", title = "SES forecasts: simple vs optimal initial level")
+
+```
+
+*Answer:* optimal ends up with a lower alpha and a lower SSE.
+
+------------------------------------------------------------------------
+
+# Exercise 2
+
+Use the data set `books` from the package `fpp3`, to repeat the analysis with several variants of a Holt's model:
+
+### 1. A Holt's model with the `holt` function in R. Summarize the results, plot the series and add the past forecasts. Start first with some random choices for α and β̃ (etc.) and proceed after checking and choosing the model with the optimal choices for them.
+
+> Note: there are some constraints on the parameters: 0 \< α \< 1, 0 ⩽ β̃ ⩽ 1, 0 \< γ \< 1 − α, 0.8 \< Φ \< 0.98. Parameter γ is only needed for seasonality effect. Parameter Φ is needed in case of damping effect.
+
+```{r ex2-1-random}
+# ex2-1-random: Holt with hand-picked parameters
+holt_r1 <- holt(paperback, alpha = 0.3, beta = 0.1, h = 4)
+holt_r2 <- holt(paperback, alpha = 0.8, beta = 0.2, h = 4)
+
+summary(holt_r1)
+summary(holt_r2)
+
+autoplot(paperback) +
+  autolayer(fitted(holt_r1), series = "α = 0.3, β = 0.1") +
+  autolayer(fitted(holt_r2), series = "α = 0.8, β = 0.2") +
+  autolayer(holt_r1, PI = FALSE, series = "α = 0.3, β = 0.1") +
+  autolayer(holt_r2, PI = FALSE, series = "α = 0.8, β = 0.2") +
+  labs(y = "Sales", title = "Holt with hand-picked parameters")
+```
+
+```{r ex2-1-optimal}
+# ex2-1-optimal: let holt() estimate the parameters
+holt_opt <- holt(paperback, h = 4)
+summary(holt_opt)
+
+autoplot(holt_opt) +
+  autolayer(fitted(holt_opt), series = "Fitted (past forecasts)") +
+  labs(y = "Sales", title = "Holt with optimised parameters")
+
+# Compare the three fits
+rbind(
+  "α = 0.3, β = 0.1" = accuracy(holt_r1)[, c("RMSE", "MAE", "MAPE")],
+  "α = 0.8, β = 0.2" = accuracy(holt_r2)[, c("RMSE", "MAE", "MAPE")],
+  "Optimal"          = accuracy(holt_opt)[, c("RMSE", "MAE", "MAPE")]
+)
+```
+
+*Answer:* The optimised Holt model picks very small smoothing parameters, so its level and trend barely react to new observations and it behaves almost like a straight trend line, whereas the hand-picked larger α (especially α = 0.8) makes the fitted values chase every daily swing, which gives volatile past forecasts and a forecast slope that depends heavily on the last few days.
+
+### 2. A Holt's model with damped trend (see options in `?holt`). Summarize it, plot the series and add the past forecasts.
+
+```{r ex2-2}
+holt_dampt <- holt(paperback, damped = TRUE, h = 4)
+summary(holt_dampt)
+
+# Estimated parameters, including the damping parameter phi
+holt_dampt$model$par
+
+# Series, fitted values (past forecasts) and forecasts
+autoplot(holt_dampt) +
+  autolayer(fitted(holt_dampt), series = "Fitted (past forecasts)") +
+  labs(y = "Sales", title = "Holt with damped trend")
+
+# Compare with the undamped Holt model from part 1
+autoplot(paperback) +
+  autolayer(holt_opt,   PI = FALSE, series = "Holt") +
+  autolayer(holt_dampt, PI = FALSE, series = "Damped Holt") +
+  labs(y = "Sales", title = "Holt vs damped Holt forecasts")
+
+rbind(
+  "Holt"        = accuracy(holt_opt)[, c("RMSE", "MAE", "MAPE")],
+  "Damped Holt" = accuracy(holt_dampt)[, c("RMSE", "MAE", "MAPE")]
+)
+
+```
+
+*Answer:* The damped Holt model estimates α and β close to 0 (≈ 0.0002) and φ = 0.98, the upper bound, so it barely damps and stays almost the same straight trend line as the regular Holt model. Its forecasts are slightly lower and flatter, and it fits a little worse (RMSE 31.8 vs 31.1), so over a 4-day horizon damping adds nothing for this series.
+
+### 3. A Holt's model with the `ets` function. Summarize it, plot the decomposition, plot the forecast and add the past forecasts.
+
+```{r ex2-3}
+# Holt's linear trend as an ETS model: Additive error, Additive trend, No seasonality
+ets_holt <- ets(paperback, model = "AAN", damped = FALSE)
+summary(ets_holt)
+
+# Decomposition: observed series, level and slope over time
+autoplot(ets_holt)
+
+# Forecast the next 4 days and add the past forecasts (fitted values)
+ets_fc <- forecast(ets_holt, h = 4)
+
+autoplot(ets_fc) +
+  autolayer(fitted(ets_holt), series = "Fitted (past forecasts)") +
+  labs(y = "Sales", title = "Holt's model via ets() – ETS(A,A,N)")
+
+# Compare with the holt() fit from part 1
+rbind(
+  "holt()"         = accuracy(holt_opt)[, c("RMSE", "MAE", "MAPE")],
+  "ets(A,A,N)"     = accuracy(ets_holt)[, c("RMSE", "MAE", "MAPE")]
+)
+```
+
+*Answer:* ets() fits the same ETS(A,A,N) model as holt(), with near-zero α and β (≈ 0.0001) and identical accuracy (RMSE 31.14). It also has a lower AIC (318.3) than the damped model (321.6). The decomposition shows why the fit is a straight trend line: the level rises linearly from about 171 to 208, and the slope stays almost constant at about 1.25 sales per day.
+
+------------------------------------------------------------------------
+
+# Exercise 3
+
+Use the domotic data set (`Domotic2.xlsx`) available in Moodle under datasets. It was retrieved from <http://archive.ics.uci.edu/ml/datasets/SML2010>. You can use this link to see a description of the data set. In this exercise, the weather temperature is to be predicted (`WeatherTemperature`). This is indeed an important information to set the working parameters of the domotic house.
+
+### 1. Load the data, take only the data of April (18.04.2012 - 30.04.2012) and the temperature column (`Temperature_Comedor_Sensor`) and plot them. Do you think it can be predicted using a Holt-Winters method? Why?
+
+```{r ex3-1}
+data <- read_excel("Domotic2.xlsx")
+str(data)   # check how the Date column was read
+
+april <- data |>
+  mutate(Date = if (is.character(Date)) dmy(Date) else as.Date(Date)) |>
+  filter(between(Date, as.Date("2012-04-18"), as.Date("2012-04-30")))
+
+# The data is recorded every 15 minutes -> 96 observations per day
+temp_comedor <- ts(april$Temperature_Comedor_Sensor, frequency = 96)
+
+autoplot(temp_comedor) +
+  labs(x = "Day", y = "Temperature (°C)",
+       title = "Temperature_Comedor_Sensor, 18–30 April 2012")
+```
+
+*Answer:*
+
+### 2. Compute the hourly averages over this period and build a `ts` object with them (seasonality 24 hours). Use this object to make a forecast for May. Plot the forecasts. Note: use the prediction model you think is the most appropriate.
+
+```{r ex3-2}
+# Hourly averages of any variable (works whether Date/Time were read as text or date-time)
+to_hourly <- function(df, var) {
+  df |>
+    mutate(Date = if (is.character(Date)) dmy(Date) else as.Date(Date),
+           Hour = if (inherits(Time, "POSIXct")) hour(Time)
+                  else as.integer(sub(":.*", "", Time))) |>
+    group_by(Date, Hour) |>
+    summarise(Value = mean({{ var }}), .groups = "drop") |>
+    arrange(Date, Hour)
+}
+
+april_hourly <- to_hourly(april, Temperature_Comedor_Sensor)
+stopifnot(nrow(april_hourly) == 13 * 24)   # 13 full days, no missing hours
+
+temp_hourly <- ts(april_hourly$Value, frequency = 24)
+
+autoplot(temp_hourly) +
+  labs(x = "Day", y = "Temperature (°C)", title = "Hourly average temperature, 18–30 April")
+
+# Additive Holt-Winters (level + damped trend + 24-hour seasonality), forecast all of May
+h_may <- 24 * 31
+hw_fit <- hw(temp_hourly, seasonal = "additive", damped = TRUE, h = h_may)
+summary(hw_fit)
+
+autoplot(hw_fit) +
+  labs(x = "Day", y = "Temperature (°C)", title = "Holt-Winters forecast for May")
+
+```
+
+```{R}
+#since both plots are the same justw wanted to make sure I didn't fuck up anything
+length(temp_comedor)  # ~1248
+length(temp_hourly)   # 312
+
+```
+
+*Answer:*
+
+### 3. Compare your forecast with the observed data for May. Does the prediction look good?
+
+```{r ex3-3}
+# Observed May data, hourly averages
+may_hourly <- to_hourly(data, Temperature_Comedor_Sensor) |>
+  filter(month(Date) == 5)
+
+range(may_hourly$Date)   # which May days are available
+nrow(may_hourly)         # number of observed May hours
+
+# April ends at day 13, hour 24 -> May starts at day 14
+may_ts <- ts(may_hourly$Value, start = c(14, may_hourly$Hour[1] + 1), frequency = 24)
+
+# Full forecast with the observed May data overlaid
+autoplot(hw_fit) +
+  autolayer(may_ts, series = "Observed May") +
+  labs(x = "Day", y = "Temperature (°C)", title = "Holt-Winters forecast vs observed May")
+
+# Zoom on the period where observed May data exists
+autoplot(hw_fit) +
+  autolayer(may_ts, series = "Observed May") +
+  coord_cartesian(xlim = c(12, max(time(may_ts)) + 0.5)) +
+  labs(x = "Day", y = "Temperature (°C)", title = "Forecast vs observed May (zoom)")
+
+# Forecast accuracy over the observed May hours (Test set row)
+accuracy(hw_fit, may_ts)
+
+```
+
+*Answer:*
+
+### 4. Can this analysis be repeated for `CO2ComedorSensor` variable? Plot the series of data and comment the previous question.
+
+```{r ex3-4}
+# 1. Raw April CO2 series (15-minute data)
+co2_raw <- ts(april$CO2_Comedor_Sensor, frequency = 96)
+
+autoplot(co2_raw) +
+  labs(x = "Day", y = "CO2 (ppm)", title = "CO2_Comedor_Sensor, 18–30 April 2012")
+
+# 2. Hourly averages and Holt-Winters forecast for May
+co2_april <- to_hourly(april, CO2_Comedor_Sensor)
+co2_hourly <- ts(co2_april$Value, frequency = 24)
+
+autoplot(co2_hourly) +
+  labs(x = "Day", y = "CO2 (ppm)", title = "Hourly average CO2, 18–30 April")
+
+hw_co2 <- hw(co2_hourly, seasonal = "additive", damped = TRUE, h = h_may)
+summary(hw_co2)
+
+# 3. Compare with observed May
+co2_may <- to_hourly(data, CO2_Comedor_Sensor) |>
+  filter(month(Date) == 5)
+co2_may_ts <- ts(co2_may$Value, start = c(14, co2_may$Hour[1] + 1), frequency = 24)
+
+autoplot(hw_co2) +
+  autolayer(co2_may_ts, series = "Observed May") +
+  labs(x = "Day", y = "CO2 (ppm)", title = "Holt-Winters CO2 forecast for May")
+
+autoplot(hw_co2) +
+  autolayer(co2_may_ts, series = "Observed May") +
+  coord_cartesian(xlim = c(12, max(time(co2_may_ts)) + 0.5)) +
+  labs(x = "Day", y = "CO2 (ppm)", title = "CO2 forecast vs observed May (zoom)")
+
+accuracy(hw_co2, co2_may_ts)
+
+# Optional: how strong is the daily pattern compared with temperature?
+ggseasonplot(co2_hourly) + labs(title = "CO2 by hour of day")
+ggseasonplot(temp_hourly) + labs(title = "Temperature by hour of day")
+```
+
+*Answer:*
+
+------------------------------------------------------------------------
+
+# Exercise 4
+
+Dataset `global_economy` contains the annual Exports from many countries. Select one country to analyse.
+
+```{r ex4-select}
+# global_economy is part of fpp3 (tsibbledata): already loaded
+global_economy
+
+# List all available countries
+global_economy |>
+  as_tibble() |>
+  distinct(Country) |>
+  pull(Country)
+
+# Number of countries and years covered
+n_distinct(global_economy$Country)
+range(global_economy$Year)
+
+# Countries with complete Exports data (no missing years)
+global_economy |>
+  as_tibble() |>
+  group_by(Country) |>
+  summarise(n_missing = sum(is.na(Exports))) |>
+  filter(n_missing == 0) |>
+  pull(Country)
+
+# Example: select one country (here Switzerland)
+country <- "Belgium"
+exports <- global_economy |>
+  filter(Country == country) |>
+  dplyr::select(Year, Exports)
+
+```
+
+### 1. Plot the Exports series for selected country and discuss the main features of the data.
+
+```{r ex4-1}
+autoplot(exports, Exports) +
+  labs(y = "Exports (% of GDP)", title = paste("Exports of", country))
+```
+
+*Discussion:* Belgium’s exports rose steadily from about 38% of GDP in 1960 to about 85% in 2017, which is a strong upward trend. Because the data is annual, there’s no seasonality. Around the trend there are irregular ups and downs, such as the peaks in 1974 and 1984 and the dip in the early 1990s. There’s also a sharp drop in 2009, during the global financial crisis, followed by a quick recovery. The size of the swings stays roughly constant over time, so a trend model without seasonality, like Holt’s linear method, suits this series better than SES or Holt-Winters.
+
+### 2. Use one of the viewed methods (simple exponential smoothing, Holt, Holt-Winter) which is appropriated to your series. Justify your choice. Comment on your model's parameter(s). How well does your model fit the data?
+
+```{r ex4-2}
+# Exports of Belgium as a ts object (annual)
+exports_ts <- ts(exports$Exports, start = min(exports$Year), frequency = 1)
+
+# Holt's linear trend method, parameters estimated by holt()
+holt_be <- holt(exports_ts, h = 5)
+summary(holt_be)
+
+# Estimated parameters
+holt_be$model$par
+
+# Series with fitted values (past forecasts)
+autoplot(exports_ts) +
+  autolayer(fitted(holt_be), series = "Fitted (Holt)") +
+  labs(x = "Year", y = "Exports (% of GDP)", title = "Belgium exports – Holt's linear method")
+
+# Residual checks: should look like white noise
+checkresiduals(holt_be)
+
+# Justify the choice: compare with SES (no trend) and damped Holt
+ses_be    <- ses(exports_ts, h = 5)
+holt_d_be <- holt(exports_ts, damped = TRUE, h = 5)
+
+rbind(
+  "SES"         = c(accuracy(ses_be)[, c("RMSE", "MAE", "MAPE")],    AICc = ses_be$model$aicc),
+  "Holt"        = c(accuracy(holt_be)[, c("RMSE", "MAE", "MAPE")],   AICc = holt_be$model$aicc),
+  "Damped Holt" = c(accuracy(holt_d_be)[, c("RMSE", "MAE", "MAPE")], AICc = holt_d_be$model$aicc)
+)
+```
+
+*Answer:*
+
+### 3. Run model with different values of the parameter(s). Plot it against parameter(s) values. How each parameter does impact the forecast?
+
+```{r ex4-3}
+# Grids of parameter values (initial = "simple" so any beta in [0, 1] is allowed)
+alphas <- seq(0.05, 0.95, by = 0.05)
+betas  <- seq(0.01, 0.95, by = 0.05)
+a_opt  <- holt_be$model$par["alpha"]
+
+holt_sse <- function(a, b) {
+  sum(residuals(holt(exports_ts, alpha = a, beta = b, initial = "simple"))^2)
+}
+
+# SSE vs alpha (beta fixed small) and SSE vs beta (alpha fixed at its estimate)
+sse_alpha <- sapply(alphas, \(a) holt_sse(a, 0.01))
+sse_beta  <- sapply(betas,  \(b) holt_sse(a_opt, b))
+
+tibble(alpha = alphas, SSE = sse_alpha) |>
+  ggplot(aes(alpha, SSE)) + geom_line() + geom_point() +
+  labs(title = "SSE vs alpha (beta = 0.01)")
+
+tibble(beta = betas, SSE = sse_beta) |>
+  ggplot(aes(beta, SSE)) + geom_line() + geom_point() +
+  labs(title = paste0("SSE vs beta (alpha = ", round(a_opt, 2), ")"))
+
+# Effect on the forecasts: vary alpha, then vary beta
+autoplot(exports_ts) +
+  autolayer(holt(exports_ts, alpha = 0.2,   beta = 0.01, initial = "simple", h = 5), PI = FALSE, series = "α = 0.2") +
+  autolayer(holt(exports_ts, alpha = a_opt, beta = 0.01, initial = "simple", h = 5), PI = FALSE, series = "α = 0.69") +
+  autolayer(holt(exports_ts, alpha = 0.95,  beta = 0.01, initial = "simple", h = 5), PI = FALSE, series = "α = 0.95") +
+  labs(x = "Year", y = "Exports (% of GDP)", title = "Holt forecasts for different α (β = 0.01)")
+
+autoplot(exports_ts) +
+  autolayer(holt(exports_ts, alpha = a_opt, beta = 0.01, initial = "simple", h = 5), PI = FALSE, series = "β = 0.01") +
+  autolayer(holt(exports_ts, alpha = a_opt, beta = 0.3,  initial = "simple", h = 5), PI = FALSE, series = "β = 0.3") +
+  autolayer(holt(exports_ts, alpha = a_opt, beta = 0.8,  initial = "simple", h = 5), PI = FALSE, series = "β = 0.8") +
+  labs(x = "Year", y = "Exports (% of GDP)", title = "Holt forecasts for different β (α = 0.69)")
+```
+
+*Answer:*
+
+### 4. Provide forecast for 5 steps ahead. Does your prediction look good? Please, explain.
+
+```{r ex4-4}
+# 5-step-ahead forecast from the chosen Holt model (4.2)
+holt_be <- holt(exports_ts, h = 5)
+holt_be            # point forecasts with 80% and 95% intervals
+
+autoplot(holt_be) +
+  autolayer(fitted(holt_be), series = "Fitted") +
+  labs(x = "Year", y = "Exports (% of GDP)", title = "Belgium exports – 5-year Holt forecast")
+
+# Optional check of forecast quality: hold out the last 5 years and compare
+train <- window(exports_ts, end = 2012)
+test  <- window(exports_ts, start = 2013)
+
+holt_train <- holt(train, h = 5)
+
+autoplot(holt_train) +
+  autolayer(test, series = "Actual 2013–2017") +
+  labs(x = "Year", y = "Exports (% of GDP)", title = "Holt forecast on hold-out years")
+
+accuracy(holt_train, test)
+```
+
+*Answer:*
+
+------------------------------------------------------------------------
+
+# Exercise 5
+
+Use the data set `books` from the package `fpp3` to explore Holt's exponential smoothing model with damping. Throughout this exercise, focus on how the state equations of the model can be used to simulate future paths and compute forecast-based quantities.
+
+### 1. Convert the data to a `tsibble` object and fit a damped Holt model (ETS(A,Ad,N)) to the paperback series.
+
+- Plot the observed series, fitted values, and 10-step-ahead forecasts.
+- Report the estimated smoothing parameters and final state values.
+
+```{r ex5-1-fit}
+# Paperback series as a tsibble (books is already a tsibble from your setup)
+paperback_tsbl <- books |>
+  filter(Type == "Paperback")
+
+# Damped Holt: ETS(A,Ad,N)
+fit_damped <- paperback_tsbl |>
+  model(damped_holt = ETS(Sales ~ error("A") + trend("Ad") + season("N")))
+
+report(fit_damped)
+```
+
+```{r ex5-1-plot}
+fc_damped <- fit_damped |> forecast(h = 10)
+
+fc_damped |>
+  autoplot(paperback_tsbl) +
+  geom_line(data = augment(fit_damped), aes(y = .fitted, colour = "Fitted")) +
+  labs(x = "Day", y = "Sales", colour = NULL,
+       title = "Paperback sales – damped Holt ETS(A,Ad,N), 10-day forecast")
+```
+
+```{r ex5-1-params}
+# Estimated smoothing parameters (alpha, beta, phi) and initial states (l[0], b[0])
+tidy(fit_damped)
+
+# Residual variance (needed for the simulations in 5.3)
+sigma2 <- glance(fit_damped)$sigma2
+sigma2
+
+# Final state values: level and slope at the last observation (Day 30)
+final_states <- components(fit_damped) |>
+  as_tibble() |>
+  tail(1)
+final_states
+```
+
+### 2. Identify and write down the state equations corresponding to the damped Holt model based on the ETS table.
+
+- Specify the measurement equation and the state update equations.
+- Clearly define all parameters and states involved.
+
+*Measurement equation:*
+
+$$y_t = \ell_{t-1} + \phi\, b_{t-1} + \varepsilon_t$$
+
+*State equations:*
+
+$$\ell_t = \ell_{t-1} + \phi\, b_{t-1} + \alpha\, \varepsilon_t$$
+
+$$b_t = \phi\, b_{t-1} + \beta\, \varepsilon_t$$
+
+with $\varepsilon_t \overset{iid}{\sim} \mathcal{N}(0, \sigma^2)$.
+
+*Definitions of parameters and states:*
+
+- $y_t$: paperback sales on day $t$
+- $\ell_t$: level of the series at time $t$ (state)
+- $b_t$: slope / trend at time $t$ (state)
+- $\varepsilon_t$: innovation (one-step forecast error), Gaussian with variance $\sigma^2$
+- $\alpha$: smoothing parameter for the level, $\hat\alpha = 0.0326$
+- $\beta$: smoothing parameter for the trend, $\hat\beta = 0.0001$
+- $\phi$: damping parameter ($0 < \phi < 1$), $\hat\phi = 0.98$
+- $\sigma^2$: innovation variance, $\hat\sigma^2 = 1220.29$
+- Initial states: $\hat\ell_0 = 171.83$, $\hat b_0 = 1.835$
+
+With these estimates, the fitted model is:
+
+$$\begin{aligned}
+y_t &= \ell_{t-1} + 0.98\, b_{t-1} + \varepsilon_t \\
+\ell_t &= \ell_{t-1} + 0.98\, b_{t-1} + 0.0326\, \varepsilon_t \\
+b_t &= 0.98\, b_{t-1} + 0.0001\, \varepsilon_t
+\end{aligned}
+\qquad \varepsilon_t \sim \mathcal{N}(0,\ 1220.29)$$
+
+### 3. Using the state equations and the estimated parameters, simulate one future trajectory over the next h = 10 periods.
+
+- Initialize the states with the final estimates.
+- Generate Gaussian innovations εₜ ∼ N(0, σ̂²).
+- Plot the simulated path together with the historical series.
+
+```{r ex5-3}
+# Estimated parameters from the fit
+pars  <- tidy(fit_damped)
+alpha <- pars$estimate[pars$term == "alpha"]
+beta  <- pars$estimate[pars$term == "beta"]
+phi   <- pars$estimate[pars$term == "phi"]
+sigma <- sqrt(glance(fit_damped)$sigma2)
+
+# Final states at T = 30 (last row of components)
+l_T <- final_states$level
+b_T <- final_states$slope
+
+# Simulate one future path with the state equations
+simulate_path <- function(h, l0, b0, alpha, beta, phi, sigma) {
+  y <- numeric(h)
+  l <- l0
+  b <- b0
+  eps <- rnorm(h, mean = 0, sd = sigma)
+  for (t in 1:h) {
+    y[t]  <- l + phi * b + eps[t]           # measurement equation
+    l_new <- l + phi * b + alpha * eps[t]   # level equation
+    b     <- phi * b + beta * eps[t]        # trend equation
+    l     <- l_new
+  }
+  y
+}
+
+set.seed(123)
+h <- 10
+sim_path <- simulate_path(h, l_T, b_T, alpha, beta, phi, sigma)
+
+# Plot the simulated path together with the historical series
+T_last <- max(paperback_tsbl$Day)
+sim_df <- tibble(Day = T_last + 1:h, Sales = sim_path)
+
+ggplot() +
+  geom_line(data = paperback_tsbl, aes(Day, Sales, colour = "Observed")) +
+  geom_line(data = sim_df, aes(Day, Sales, colour = "Simulated path")) +
+  geom_line(data = bind_rows(tail(as_tibble(paperback_tsbl), 1), sim_df),
+            aes(Day, Sales, colour = "Simulated path"), linetype = "dashed") +
+  labs(x = "Day", y = "Sales", colour = NULL,
+       title = "One simulated 10-day path – damped Holt ETS(A,Ad,N)")
+
+```
+
+### 4. Repeat the simulation R times (e.g. R = 1000) and store all simulated paths. Use these to:
+
+```{r ex5-4-sim}
+set.seed(42)
+R <- 1000
+h <- 10
+
+# R x h matrix: each row is one simulated future path
+sims <- t(replicate(R, simulate_path(h, l_T, b_T, alpha, beta, phi, sigma)))
+dim(sims)   # 1000 x 10
+
+# Plot all paths with the historical series
+sims_long <- as_tibble(sims, .name_repair = ~ paste0("h", 1:h)) |>
+  mutate(sim = row_number()) |>
+  pivot_longer(-sim, names_to = "h", values_to = "Sales") |>
+  mutate(Day = T_last + as.integer(sub("h", "", h)))
+
+ggplot() +
+  geom_line(data = sims_long, aes(Day, Sales, group = sim), alpha = 0.03, colour = "steelblue") +
+  geom_line(data = paperback_tsbl, aes(Day, Sales)) +
+  labs(x = "Day", y = "Sales", title = paste(R, "simulated paths – damped Holt"))
+```
+
+- Compute 95% prediction intervals for each horizon t + 1, …, t + h.
+
+```{r ex5-4-pi}
+# 95% prediction intervals from the simulated quantiles at each horizon
+pi_sim <- tibble(
+  Day   = T_last + 1:h,
+  mean  = colMeans(sims),
+  lower = apply(sims, 2, quantile, 0.025),
+  upper = apply(sims, 2, quantile, 0.975)
+)
+pi_sim
+
+# Compare with the analytical intervals from fable
+fc_damped |>
+  hilo(level = 95) |>
+  unpack_hilo(`95%`) |>
+  as_tibble() |>
+  dplyr::select(Day, .mean, `95%_lower`, `95%_upper`)
+
+ggplot() +
+  geom_line(data = paperback_tsbl, aes(Day, Sales)) +
+  geom_ribbon(data = pi_sim, aes(Day, ymin = lower, ymax = upper), fill = "steelblue", alpha = 0.3) +
+  geom_line(data = pi_sim, aes(Day, mean), colour = "steelblue") +
+  labs(x = "Day", y = "Sales", title = "Simulated mean and 95% prediction interval")
+
+```
+
+- Analyze the distribution of total sales over the next 5 periods (histogram and summary statistics).
+
+```{r ex5-4-total}
+# Total sales over the next 5 days for each simulated path
+total5 <- rowSums(sims[, 1:5])
+
+summary(total5)
+sd(total5)
+quantile(total5, c(0.025, 0.975))
+
+ggplot(tibble(total5), aes(total5)) +
+  geom_histogram(bins = 30, fill = "steelblue", colour = "white") +
+  geom_vline(xintercept = mean(total5), colour = "red", linetype = "dashed") +
+  labs(x = "Total sales over next 5 days", y = "Count",
+       title = "Distribution of simulated 5-day total sales")
+
+```
+
+*Answer:*
+
+- Estimate the probability that sales increase for three consecutive days.
+
+```{r ex5-4-prob}
+y_T <- tail(paperback_tsbl$Sales, 1)   # last observed sales (day 30)
+
+# P(y_T < y_T+1 < y_T+2 < y_T+3): sales rise on each of the next three days
+increase3 <- apply(cbind(y_T, sims[, 1:3]), 1, \(x) all(diff(x) > 0))
+p_increase3 <- mean(increase3)
+p_increase3
+```
+
+*Answer: not probable*

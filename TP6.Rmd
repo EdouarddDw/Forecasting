@@ -44,13 +44,11 @@ $$\gamma(2) = \left( \frac{\sigma^2 (1 - \phi_2)}{1 - \phi_2 - \phi_1^2 (1 + \ph
 
 The process is stationary with mean zero, so $\gamma(h) = \mathbb{E}[Y_t Y_{t-h}]$ and $\gamma(-h) = \gamma(h)$. Multiply the model by $Y_{t-h}$ and take expectations. Since $\varepsilon_t$ is independent of the past, $\mathbb{E}[\varepsilon_t Y_{t-h}] = 0$ for $h \geq 1$ and $\mathbb{E}[\varepsilon_t Y_t] = \sigma^2$. This gives the Yule–Walker equations:
 
-$$
-\begin{aligned}
+$$\begin{aligned}
 h = 0: &\quad \gamma(0) = \phi_1 \gamma(1) + \phi_2 \gamma(2) + \sigma^2 \\
 h = 1: &\quad \gamma(1) = \phi_1 \gamma(0) + \phi_2 \gamma(1) \\
 h = 2: &\quad \gamma(2) = \phi_1 \gamma(1) + \phi_2 \gamma(0)
-\end{aligned}
-$$
+\end{aligned}$$
 
 From $h = 1$:
 
@@ -456,34 +454,17 @@ results |>
 
 In which situations would you expect the full likelihood to give better results than the conditional likelihood?
 
-**Answer:**
-The full likelihood should do better than the conditional likelihood when:
+**Answer:** The full likelihood should do better than the conditional likelihood when:
 
-1. **The sample is small.** The conditional likelihood throws away the information in $(Y_1, Y_2)$.
-   With $T = 30$ that is about 7% of the data, which matters. With large $T$ the first two
-   observations are negligible and both estimators are asymptotically equivalent.
+1.  **The sample is small.** The conditional likelihood throws away the information in $(Y_1, Y_2)$. With $T = 30$ that is about 7% of the data, which matters. With large $T$ the first two observations are negligible and both estimators are asymptotically equivalent.
 
-2. **The model order is high.** An AR($p$) conditional likelihood drops the first $p$ observations,
-   so the loss grows with $p$ relative to $T$. With MA terms, the conditional approach also
-   has to set the unobserved initial errors to zero, which adds bias.
+2.  **The model order is high.** An AR($p$) conditional likelihood drops the first $p$ observations, so the loss grows with $p$ relative to $T$. With MA terms, the conditional approach also has to set the unobserved initial errors to zero, which adds bias.
 
-3. **The process is close to the stationarity boundary.** The full likelihood contains
-   $f(Y_1, Y_2)$, whose variance $\gamma(0)$ explodes as the roots approach the unit circle.
-   This term penalizes near-non-stationary values and keeps estimates in the stationary region.
-   The conditional likelihood (and OLS) has no such constraint and can return non-stationary estimates.
+3.  **The process is close to the stationarity boundary.** The full likelihood contains $f(Y_1, Y_2)$, whose variance $\gamma(0)$ explodes as the roots approach the unit circle. This term penalizes near-non-stationary values and keeps estimates in the stationary region. The conditional likelihood (and OLS) has no such constraint and can return non-stationary estimates.
 
-4. **The stationarity and Gaussian assumptions actually hold.** The extra term is only valid if
-   $(Y_1, Y_2)$ really comes from the stationary distribution. If the series starts from a fixed
-   value, is non-stationary, or is misspecified, that term adds wrong information and the
-   conditional likelihood is more robust.
+4.  **The stationarity and Gaussian assumptions actually hold.** The extra term is only valid if $(Y_1, Y_2)$ really comes from the stationary distribution. If the series starts from a fixed value, is non-stationary, or is misspecified, that term adds wrong information and the conditional likelihood is more robust.
 
-**In our simulation**, conditional ML and OLS give identical $\hat\phi$ boxplots, as expected from
-2.5. Full ML (and `fable::ARIMA`, which also maximises the exact likelihood) is centred slightly
-closer to the true $\phi_1 = 0.9$ and $\phi_2 = -0.7$. The clearest gain is for $\sigma^2$: the
-conditional/OLS estimates have a median around 23, underestimating the true value of 25, while full
-ML is less biased. The differences are modest because $(0.9, -0.7)$ lies well inside the stationary
-region; they would grow for smaller $T$ or parameters closer to the boundary.
-
+**In our simulation**, conditional ML and OLS give identical $\hat\phi$ boxplots, as expected from 2.5. Full ML (and `fable::ARIMA`, which also maximises the exact likelihood) is centred slightly closer to the true $\phi_1 = 0.9$ and $\phi_2 = -0.7$. The clearest gain is for $\sigma^2$: the conditional/OLS estimates have a median around 23, underestimating the true value of 25, while full ML is less biased. The differences are modest because $(0.9, -0.7)$ lies well inside the stationary region; they would grow for smaller $T$ or parameters closer to the boundary.
 
 # Exercise 3
 
