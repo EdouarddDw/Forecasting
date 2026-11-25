@@ -1,0 +1,676 @@
+---
+title: "Practical 9 — Vector Autoregression (VAR) Models and Dynamic Factor Modeling"
+subtitle: "Forecasting with Applications in Business (S411031) — Fall Semester 2026"
+author: "Edouard"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r packages}
+# install.packages(c("MASS", "sparseDFM"))
+library(MASS)       # mvrnorm()
+library(sparseDFM)  # exports data, transformData(), tuneFactors(), sparseDFM()
+library(forecast)  # better: add this to your packages chunk at the top
+
+```
+
+# Exercise 1
+
+Consider a VAR(1) model for two time series $Y_{1,t}$ and $Y_{2,t}$:
+
+$$Y_t = A Y_{t-1} + \varepsilon_t,$$
+
+where
+
+$$Y_t = \begin{pmatrix} Y_{1,t} \\ Y_{2,t} \end{pmatrix}, \quad
+A = \begin{pmatrix} a_{11} & a_{12} \\ a_{21} & a_{22} \end{pmatrix}, \quad
+\varepsilon_t = \begin{pmatrix} \varepsilon_{1,t} \\ \varepsilon_{2,t} \end{pmatrix}, \quad
+\varepsilon_t \sim N(0, \Sigma).$$
+
+## a.
+
+Specify the dimension of each object in the equation ($Y_t$, $A$, $\varepsilon_t$, $\Sigma$).
+
+**Answer:**
+
+$$Y_t \in \mathbb{R}^{2}, \quad A \in \mathbb{R}
+^{2 \times 2}, \quad \varepsilon_t \in \mathbb{R}^{2}, \quad \Sigma \in \mathbb{R}^{2 \times 2}$$
+
+## b.
+
+Write explicitly the system of equations corresponding to the VAR(1) model.
+
+**Answer:**
+
+$$\begin{bmatrix} Y_{1,t} \\ Y_{2,t}\end{bmatrix}= \begin{bmatrix}a_{11} & a_{12} \\ a_{21} & a_{22}\end{bmatrix} \begin{bmatrix}Y_{1,t-1} \\ Y_{2,t-1}\end{bmatrix} +\begin{bmatrix}\varepsilon_{1,t} \\ \varepsilon_{2,t}\end{bmatrix}$$
+
+$$\begin{aligned}
+Y_{1,t}&=a_{11}Y_{1,t-1}+a_{12}Y_{2,t-1} + \varepsilon_{1,t} \\
+Y_{2,t}&=a_{21}Y_{1,t-1}+a_{22}Y_{2,t-1} + \varepsilon_{2,t}
+\end{aligned}$$
+
+## c.
+
+Explain in words what each coefficient $a_{ij}$ represents.
+
+**Answer:**
+
+$a_{11}$: is the effect of $Y_{1,t-1}$ on $Y_{1,t}$ $a_{12}$: is the effect of $Y_{2,t-1}$ on $Y_{1,t}$ $a_{21}$: is the effect of $Y_{1,t-1}$ on $Y_{2,t}$ $a_{22}$: is the effect of $Y_{2,t-1}$ on $Y_{2,t}$
+
+The diagonal coefficients $a_{11}$ and $a_{22}$ capture each series' persistence, meaning how much it depends on its own past. The off-diagonal coefficients $a_{12}$ and $a_{21}$ capture the dynamic spillovers between the two series. For example, $a_{12} = 0$ would mean that $Y_2$ does not Granger-cause $Y_1$: past values of $Y_2$ don't help predict $Y_1$ once its own past is known.
+
+## d.
+
+Discuss the role of the covariance matrix $\Sigma$ in the model. What does it imply if $\Sigma$ is diagonal?
+
+**Answer:**
+
+The covariance matrix $\Sigma$ describes how the shocks to the two series behave and how they relate to each other at the same point in time:
+
+$$\Sigma = \begin{pmatrix} \sigma_1^2 & \sigma_{12} \\ \sigma_{12} & \sigma_2^2 \end{pmatrix}$$
+
+The diagonal elements $\sigma_1^2$ and $\sigma_2^2$ are the variances of the shocks $\varepsilon_{1,t}$ and $\varepsilon_{2,t}$. They measure how much unpredictable variation each series has. The off-diagonal element $\sigma_{12}$ is the covariance between the two shocks, and it captures the contemporaneous link between the series. The matrix $A$ describes how the series affect each other across time (from $t-1$ to $t$). $\Sigma$ describes how they move together within the same period. If $\sigma_{12} \neq 0$, an unexpected shock to $Y_{1,t}$ tends to come with a shock to $Y_{2,t}$ at the same time. As a covariance matrix, $\Sigma$ is symmetric and positive definite.
+
+If $\Sigma$ is diagonal, then $\sigma_{12} = 0$ and the two shocks are uncorrelated. Because $\varepsilon_t$ is normally distributed, this means they are also independent. A surprise in one series then tells us nothing about a surprise in the other in the same period, and the two series are linked only through the lagged coefficients in $A$. It also reduces the number of parameters to estimate: $\Sigma$ has $k$ free elements instead of $k(k+1)/2$.
+
+## e.
+
+Extend the model to a VAR(2) for the same two series. Write the matrix form and specify the dimensions of each coefficient matrix.
+
+**Answer:** A VAR(2) adds a second lag:
+
+$$Y_t = A_1 Y_{t-1} + A_2 Y_{t-2} + \varepsilon_t, \qquad \varepsilon_t \sim N(0, \Sigma)$$
+
+Written out in full:
+
+$$\begin{bmatrix} Y_{1,t} \\ Y_{2,t} \end{bmatrix}
+=
+\begin{bmatrix} a_{11}^{(1)} & a_{12}^{(1)} \\ a_{21}^{(1)} & a_{22}^{(1)} \end{bmatrix}
+\begin{bmatrix} Y_{1,t-1} \\ Y_{2,t-1} \end{bmatrix}
++
+\begin{bmatrix} a_{11}^{(2)} & a_{12}^{(2)} \\ a_{21}^{(2)} & a_{22}^{(2)} \end{bmatrix}
+\begin{bmatrix} Y_{1,t-2} \\ Y_{2,t-2} \end{bmatrix}
++
+\begin{bmatrix} \varepsilon_{1,t} \\ \varepsilon_{2,t} \end{bmatrix}$$
+
+or as a system of equations:
+
+$$\begin{aligned}
+Y_{1,t} &= a_{11}^{(1)} Y_{1,t-1} + a_{12}^{(1)} Y_{2,t-1} + a_{11}^{(2)} Y_{1,t-2} + a_{12}^{(2)} Y_{2,t-2} + \varepsilon_{1,t} \\
+Y_{2,t} &= a_{21}^{(1)} Y_{1,t-1} + a_{22}^{(1)} Y_{2,t-1} + a_{21}^{(2)} Y_{1,t-2} + a_{22}^{(2)} Y_{2,t-2} + \varepsilon_{2,t}
+\end{aligned}$$
+
+Dimensions: $Y_t$, $Y_{t-1}$, $Y_{t-2}$ and $\varepsilon_t$ are all $2 \times 1$. Both coefficient matrices $A_1$ and $A_2$ are $2 \times 2$, and $\Sigma$ is still $2 \times 2$. The superscript $(\ell)$ shows which lag a coefficient belongs to: $a_{ij}^{(\ell)}$ is the effect of $Y_{j,t-\ell}$ on $Y_{i,t}$. The model now has $2 \times 4 = 8$ autoregressive coefficients, compared with 4 for the VAR(1).
+
+## f.
+
+Generalize: for a VAR($p$) model with $k$ series, specify the dimensions of $Y_t$, $\varepsilon_t$, and each coefficient matrix $A_i$, $i = 1, \dots, p$.
+
+**Answer:**
+
+VAR($p$) model with $k$ series is written as:
+
+$$Y_t = A_1 Y_{t-1} + A_2 Y_{t-2} + \dots + A_p Y_{t-p} + \varepsilon_t = \sum_{i=1}^{p} A_i Y_{t-i} + \varepsilon_t, \qquad \varepsilon_t \sim N(0, \Sigma)$$
+
+Dimensions:
+
+$Y_t$ is $k \times 1$, and so is each lag $Y_{t-i}$. It holds the values of the $k$ series at time $t$. $\varepsilon_t$ is $k \times 1$: one shock per series. Each coefficient matrix $A_i$, $i = 1, \dots, p$, is $k \times k$. Element $a_{jl}^{(i)}$ is the effect of $Y_{l,t-i}$ on $Y_{j,t}$. $\Sigma$ is $k \times k$, symmetric and positive definite.
+
+Number of parameters: the $p$ coefficient matrices have $p\,k^2$ elements in total, and $\Sigma$ has $k(k+1)/2$ free elements because it is symmetric. That gives
+
+$$\#\text{params} = p\,k^2 + \frac{k(k+1)}{2}$$
+
+The $p\,k^2$ term grows quickly as you add series or lags, which is why VARs are often limited to a few variables. Dynamic factor models, as in Exercise 3, are one way around this.
+
+# Exercise 2
+
+Consider a bivariate VAR(1) model for two time series $Y_{1,t}$ and $Y_{2,t}$:
+
+$$Y_t = A Y_{t-1} + \varepsilon_t,$$
+
+where
+
+$$Y_t = \begin{pmatrix} Y_{1,t} \\ Y_{2,t} \end{pmatrix}, \quad
+A = \begin{pmatrix} a_{11} & a_{12} \\ a_{21} & a_{22} \end{pmatrix}, \quad
+\varepsilon_t = \begin{pmatrix} \varepsilon_{1,t} \\ \varepsilon_{2,t} \end{pmatrix}, \quad
+\varepsilon_t \sim N(0, \Sigma).$$
+
+## a.
+
+Using the R function `mvrnorm`, generate a single realization of length $n = 500$ from this VAR(1) model with
+
+$$A = \begin{pmatrix} 0.5 & 0.2 \\ 0.1 & 0.4 \end{pmatrix}, \quad
+\Sigma = \begin{pmatrix} 1 & 0.3 \\ 0.3 & 1 \end{pmatrix}.$$
+
+Store the simulated series in a matrix `Y`, where each row is a time point and each column is a series.
+
+```{r ex2a}
+set.seed(123)
+n <- 500
+
+A <- matrix(c(0.5, 0.2,
+              0.1, 0.4), nrow = 2, byrow = TRUE)
+Sigma <- matrix(c(1, 0.3,
+                  0.3, 1), nrow = 2, byrow = TRUE)
+
+# 1. Draw all shocks: eps_t ~ N(0, Sigma)
+eps <- mvrnorm(n = n, mu = c(0, 0), Sigma = Sigma)
+
+# 2. Build the series recursively
+Y <- matrix(0, nrow = n, ncol = 2)
+Y[1, ] <- eps[1, ]
+
+for (t in 2:n) {
+  Y[t, ] <- A %*% Y[t - 1, ] + eps[t, ]
+}
+
+colnames(Y) <- c("Y1", "Y2")
+
+
+autoplot(ts(Y)) +
+  ggplot2::labs(title = "Simulated VAR(1)", x = "Time", y = "Value", colour = "Series")
+
+
+```
+
+## b.
+
+Show that the conditional maximum likelihood (or least squares) estimator of $A$ is
+
+$$\hat{A} = \left( \sum_{t=2}^{n} Y_{t-1} Y_{t-1}^\top \right)^{-1} \sum_{t=2}^{n} Y_{t-1} Y_t^\top,$$
+
+where
+
+- $Y_t = \begin{pmatrix} Y_{1,t} \\ Y_{2,t} \end{pmatrix}$ is the $2 \times 1$ vector of observations at time $t$,
+- $Y_{t-1}$ is the lagged observation vector at time $t-1$ of dimension $(2 \times 1)$.
+
+Once $\hat{A}$ is computed, the residuals are
+
+$$\hat{\varepsilon}_t = Y_t - \hat{A} Y_{t-1}, \quad t = 2, \dots, n,$$
+
+and the conditional covariance matrix of the residuals is estimated by
+
+$$\hat{\Sigma} = \frac{1}{n-1} \sum_{t=2}^{n} \hat{\varepsilon}_t \hat{\varepsilon}_t^\top.$$
+
+**Answer:** Least squares objective
+
+We choose $A$ to minimise the sum of squared residuals over $t = 2, \dots, n$. Each residual $Y_t - AY_{t-1}$ is a $2\times 1$ vector, so its "square" is the inner product with its own transpose:
+
+$$S(A) = \sum_{t=2}^{n} (Y_t - AY_{t-1})^\top (Y_t - AY_{t-1})$$
+
+Under normal errors, minimising $S(A)$ gives the same $\hat A$ as conditional maximum likelihood. Each equation has the same regressors, $Y_{t-1}$, so the equation-by-equation least squares estimator matches the ML estimator.
+
+Step 1: Expand the square
+
+$$(Y_t - AY_{t-1})^\top (Y_t - AY_{t-1}) = Y_t^\top Y_t - Y_t^\top A Y_{t-1} - Y_{t-1}^\top A^\top Y_t + Y_{t-1}^\top A^\top A\, Y_{t-1}$$
+
+The two middle terms are scalars and transposes of each other, so they are equal:
+
+$$S(A) = \sum_{t=2}^{n} \left( Y_t^\top Y_t - 2\,Y_{t-1}^\top A^\top Y_t + Y_{t-1}^\top A^\top A\, Y_{t-1} \right)$$
+
+Step 2: Differentiate with respect to $A$
+
+We use the matrix derivative rules
+
+$$\frac{\partial}{\partial A}\, x^\top A^\top y = y\,x^\top, \qquad \frac{\partial}{\partial A}\, x^\top A^\top A\, x = 2\,A\,x\,x^\top$$
+
+Term by term:
+
+$Y_t^\top Y_t$ does not depend on $A$, so its derivative is $0$. $-2\,Y_{t-1}^\top A^\top Y_t$: with $x = Y_{t-1}$ and $y = Y_t$, the derivative is $-2\,Y_t Y_{t-1}^\top$. $Y_{t-1}^\top A^\top A\, Y_{t-1}$: with $x = Y_{t-1}$, the derivative is $2\,A\,Y_{t-1}Y_{t-1}^\top$.
+
+Summing over $t$, and taking $A$ out of the sum on the left because it does not depend on $t$:
+
+$$\frac{\partial S(A)}{\partial A} = -2\sum_{t=2}^{n} Y_t Y_{t-1}^\top + 2A\sum_{t=2}^{n} Y_{t-1}Y_{t-1}^\top$$
+
+Step 3: First-order condition
+
+Set the derivative equal to the zero matrix and divide by 2:
+
+$$A\sum_{t=2}^{n} Y_{t-1}Y_{t-1}^\top = \sum_{t=2}^{n} Y_t Y_{t-1}^\top$$
+
+Step 4: Solve for $A$
+
+Multiply both sides on the right by $\left(\sum_{t=2}^{n} Y_{t-1}Y_{t-1}^\top\right)^{-1}$. This assumes the matrix is invertible, which holds with probability 1 for simulated continuous data:
+
+$$\boxed{\hat A = \left(\sum_{t=2}^{n} Y_t Y_{t-1}^\top\right)\left(\sum_{t=2}^{n} Y_{t-1}Y_{t-1}^\top\right)^{-1}}$$
+
+Step 5: Link to the formula in the exercise
+
+Transpose $\hat A$ using $(MN)^\top = N^\top M^\top$:
+
+$$\hat A^\top = \left(\left(\sum_{t=2}^{n} Y_{t-1}Y_{t-1}^\top\right)^{-1}\right)^\top \left(\sum_{t=2}^{n} Y_t Y_{t-1}^\top\right)^\top$$
+
+$\sum Y_{t-1}Y_{t-1}^\top$ is symmetric, so its inverse is also symmetric, and $\left(Y_t Y_{t-1}^\top\right)^\top = Y_{t-1}Y_t^\top$. So:
+
+$$\hat A^\top = \left(\sum_{t=2}^{n} Y_{t-1}Y_{t-1}^\top\right)^{-1}\sum_{t=2}^{n} Y_{t-1}Y_t^\top$$
+
+This is exactly the formula in the exercise. It therefore estimates $A^\top$. It corresponds to writing the model in row form, $Y_t^\top = Y_{t-1}^\top A^\top + \varepsilon_t^\top$, which is the classic regression form $(X^\top X)^{-1}X^\top Y$ where the rows of $X$ are the $Y_{t-1}^\top$.
+
+Step 6: Residuals and covariance
+
+With $\hat A$, the residuals and their estimated covariance matrix are:
+
+$$\hat\varepsilon_t = Y_t - \hat A\,Y_{t-1}, \quad t = 2, \dots, n, \qquad \hat\Sigma = \frac{1}{n-1}\sum_{t=2}^{n} \hat\varepsilon_t\,\hat\varepsilon_t^\top$$
+
+## c.
+
+Implement in R the least squares estimator $\hat{A}$ using your simulated data. Compute the residual vectors $\hat{\varepsilon}_t = Y_t - \hat{A} Y_{t-1}$ and the covariance matrix of the residuals $\hat{\Sigma} = \frac{1}{n-1} \sum_{t=2}^{n} \hat{\varepsilon}_t \hat{\varepsilon}_t^\top$.
+
+```{r ex2c}
+# Stack the observations: each row is one time point
+X <- Y[1:(n - 1), ]   # rows are Y_{t-1}^T, t = 2..n
+Z <- Y[2:n, ]         # rows are Y_t^T,     t = 2..n
+
+# A_hat = (sum Y_t Y_{t-1}^T) (sum Y_{t-1} Y_{t-1}^T)^{-1}
+A_hat <- t(Z) %*% X %*% solve(t(X) %*% X)
+
+# Residuals: eps_t = Y_t - A_hat Y_{t-1}  (row form: Z - X A_hat^T)
+eps_hat <- Z - X %*% t(A_hat)
+
+# Sigma_hat = 1/(n-1) * sum eps_t eps_t^T
+Sigma_hat <- t(eps_hat) %*% eps_hat / (n - 1)
+
+A_hat
+Sigma_hat
+
+```
+
+## d.
+
+Repeat the simulation $n_{sim} = 1000$ times and store the estimates of each element of $A$ and $\Sigma$. Plot boxplots of the estimates and compare them with the true parameter values.
+
+```{r ex2d}
+# Wrap simulation and estimation in functions so they can be repeated
+simulate_var1 <- function(n, A, Sigma) {
+  eps <- mvrnorm(n = n, mu = c(0, 0), Sigma = Sigma)
+  Y <- matrix(0, nrow = n, ncol = 2)
+  Y[1, ] <- eps[1, ]
+  for (t in 2:n) {
+    Y[t, ] <- A %*% Y[t - 1, ] + eps[t, ]
+  }
+  Y
+}
+
+estimate_var1 <- function(Y) {
+  n <- nrow(Y)
+  X <- Y[1:(n - 1), ]
+  Z <- Y[2:n, ]
+  A_hat <- t(Z) %*% X %*% solve(t(X) %*% X)
+  eps_hat <- Z - X %*% t(A_hat)
+  Sigma_hat <- t(eps_hat) %*% eps_hat / (n - 1)
+  list(A_hat = A_hat, Sigma_hat = Sigma_hat)
+}
+
+set.seed(123)
+nsim <- 1000
+par_names <- c("a11", "a12", "a21", "a22", "s11", "s12", "s22")
+est <- matrix(NA, nrow = nsim, ncol = 7, dimnames = list(NULL, par_names))
+
+for (s in 1:nsim) {
+  fit <- estimate_var1(simulate_var1(n, A, Sigma))
+  est[s, ] <- c(t(fit$A_hat),           # a11, a12, a21, a22 (row by row)
+                fit$Sigma_hat[1, 1],    # sigma_1^2
+                fit$Sigma_hat[1, 2],    # sigma_12 (same as [2,1], symmetric)
+                fit$Sigma_hat[2, 2])    # sigma_2^2
+}
+
+true_vals <- c(t(A), Sigma[1, 1], Sigma[1, 2], Sigma[2, 2])
+names(true_vals) <- par_names
+
+# Boxplots with the true values as red dashed lines
+est_long <- stack(as.data.frame(est))   # columns: values, ind
+true_df  <- data.frame(ind = factor(par_names, levels = par_names),
+                       value = true_vals)
+est_long$ind <- factor(est_long$ind, levels = par_names)
+
+ggplot(est_long, aes(x = "", y = values)) +
+  geom_boxplot() +
+  geom_hline(data = true_df, aes(yintercept = value),
+             colour = "red", linetype = "dashed") +
+  facet_wrap(~ ind, scales = "free_y", nrow = 2) +
+  labs(title = "Sampling distribution of VAR(1) estimates (nsim = 1000, n = 500)",
+       x = NULL, y = "Estimate")
+
+# Numerical summary: mean estimate vs truth
+round(rbind(true = true_vals, mean = colMeans(est), sd = apply(est, 2, sd)), 3)
+
+```
+
+**Comments:**
+
+# Exercise 3
+
+Consider the monthly UK exports dataset in the package `sparseDFM` with 9 target series and 434 monthly indicators. We model the targets using a Dynamic Factor Model (DFM) with $r$ latent factors:
+
+$$Y_t = \Lambda F_t + \varepsilon_t, \qquad F_t = A F_{t-1} + u_t,$$
+
+where $Y_t$ is a $n \times 1$ vector of observed series at time $t$, $F_t$ is an $r \times 1$ vector of latent factors, $\Lambda$ is the $n \times r$ loading matrix, $\varepsilon_t \sim N(0, \Sigma_\varepsilon)$ and $u_t \sim N(0, \Sigma_u)$.
+
+## a.
+
+Load the `exports` dataset from the `sparseDFM` package. Remove any incomplete rows and plot the 9 target series using `ts.plot`, adding a legend with series names.
+
+```{r ex3a}
+data <- sparseDFM::exports
+dim(data)   # should now be 226 x 445dim(data)   # 226 x 445, monthly Jan 2004 to Oct 2022
+
+# Remove incomplete rows: months where any of the 9 targets is missing
+complete <- complete.cases(data[, 1:9])
+data_cc  <- as.matrix(data[complete, , drop = FALSE])
+dim(data_cc)
+sum(!complete)   # number of rows removed (should be 2: Sep and Oct 2022)
+
+# Monthly ts so the x-axis shows years
+first_row  <- which(complete)[1]
+start_date <- c(2004 + (first_row - 1) %/% 12, (first_row - 1) %% 12 + 1)
+data_cc    <- ts(data_cc, start = start_date, frequency = 12)
+
+# The 9 target series
+goods <- data_cc[, 1:9]
+
+# Plot with the legend in a separate panel so it doesn't cover the lines
+def.par <- par(no.readonly = TRUE)
+layout(matrix(c(1, 2), nrow = 1), widths = c(4, 2))
+ts.plot(goods, col = 1:9, lty = 1:9,
+        main = "UK exports: 9 target series", xlab = "Time", ylab = "Value")
+par(mar = c(0, 0, 0, 0))
+plot.new()
+legend("center", legend = colnames(goods), col = 1:9, lty = 1:9,
+       cex = 0.7, bty = "n")
+par(def.par)
+
+```
+
+## b.
+
+Make the data stationary by applying first or second differences to each series using the `transformData` function.
+
+```{r ex3b}
+# stationary_transform: one code per column, 2 = first difference
+# (check ?transformData for the other codes, e.g. second differences)
+new_data <- transformData(data_cc, stationary_transform = rep(2, ncol(data_cc)))
+
+dim(new_data)
+head(new_data[, 1:9])   # check whether the first row is NA or was dropped
+
+# Visual check: the differenced targets should fluctuate around a constant mean
+ts.plot(ts(new_data[, 1:9], start = start_date, frequency = 12),
+        col = 1:9, lty = 1:9,
+        main = "First-differenced target series", xlab = "Time", ylab = "Change")
+```
+
+## c.
+
+Determine the optimal number of factors $r$ using the `tuneFactors` function and explain the choice of $r$ based on the information criteria and scree plot.
+
+```{r ex3c}
+# Bai & Ng (2002) information criteria, type 2 (the default)
+# Uses the stationary data from 3b; NAs in the indicators are filled internally
+r_ic <- tuneFactors(new_data, type = 2, standardize = TRUE, r.max = 15, plot = TRUE)
+r_ic
+
+```
+
+**Answer:**
+
+## d.
+
+Fit a DFM using the function `sparseDFM`.
+
+```{r ex3d}
+r_chosen <- 4   # your choice from 3c (4 = scree-plot elbow, or 7 = IC_2 minimum)
+
+# 1. Regular DFM: loadings estimated without any penalty
+fit.dfm <- sparseDFM(new_data, r = r_chosen, alg = "EM")
+
+# 2. Sparse DFM: LASSO (L1) penalty on the loadings
+#    q = 9: the first 9 columns (the targets) are not penalised
+fit.sdfm <- sparseDFM(new_data, r = r_chosen, q = 9, alg = "EM-sparse",
+                      alphas = logspace(0.4, 1, 15))
+
+summary(fit.dfm)
+summary(fit.sdfm)
+
+```
+
+## e.
+
+Plot the estimated factors and factor loadings for both models. Group the indicators according to their type (TiG, IoP, CPI, PPI, Exch, Conf, GT) and assign distinct colors to each group. Compare the sparsity patterns and discuss which indicators drive each factor.
+
+```{r ex3e, fig.width = 11, fig.height = 8}
+# ============================================================
+# Setup: groups, colours, matrices, dates
+# ============================================================
+group_sizes <- c(TiG = 9, IoP = 89, CPI = 166, PPI = 153, Exch = 12, Conf = 2, GT = 14)
+groups <- factor(rep(names(group_sizes), times = group_sizes), levels = names(group_sizes))
+group_cols <- c(TiG = "black", IoP = "#1b9e77", CPI = "#d95f02", PPI = "#7570b3",
+                Exch = "#e7298a", Conf = "#66a61e", GT = "#e6ab02")
+stopifnot(length(groups) == ncol(new_data))   # sanity check: 445 series
+
+L_dfm  <- fit.dfm$params$Lambda
+L_sdfm <- fit.sdfm$params$Lambda
+F_dfm  <- fit.dfm$state$factors
+F_sdfm <- fit.sdfm$state$factors
+
+# Differencing drops the first month(s), so align the dates to the end of the sample
+all_dates <- seq(as.Date("2004-01-01"), by = "month", length.out = nrow(data_cc))
+dates <- tail(all_dates, nrow(F_dfm))
+
+# Shaded periods for major economic events
+events <- data.frame(
+  start = as.Date(c("2008-09-01", "2020-02-01")),
+  end   = as.Date(c("2009-06-01", "2020-07-01")),
+  label = c("Financial crisis", "COVID-19")
+)
+
+my_theme <- theme_bw(base_size = 12) +
+  theme(strip.background = element_rect(fill = "grey90"),
+        strip.text = element_text(face = "bold"),
+        plot.title = element_text(face = "bold", size = 15),
+        legend.position = "bottom")
+
+# ============================================================
+# 1. Estimated factors (standardised), regular vs sparse
+# ============================================================
+make_factor_df <- function(F, model) {
+  F <- scale(F)   # standardise so both models are on the same scale
+  data.frame(date   = rep(dates, ncol(F)),
+             factor = rep(paste("Factor", seq_len(ncol(F))), each = nrow(F)),
+             value  = c(F),
+             model  = model)
+}
+factor_df <- rbind(make_factor_df(F_dfm, "Regular DFM"),
+                   make_factor_df(F_sdfm, "Sparse DFM"))
+
+p_factors <- ggplot(factor_df, aes(x = date, y = value)) +
+  geom_rect(data = events, inherit.aes = FALSE,
+            aes(xmin = start, xmax = end, ymin = -Inf, ymax = Inf, fill = label),
+            alpha = 0.25) +
+  geom_hline(yintercept = 0, colour = "grey60", linewidth = 0.3) +
+  geom_line(colour = "steelblue4", linewidth = 0.5) +
+  facet_grid(factor ~ model) +
+  scale_fill_manual(values = c("Financial crisis" = "orange", "COVID-19" = "red")) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(title = "Estimated factors (standardised)", x = NULL, y = NULL, fill = "Event") +
+  my_theme
+print(p_factors)
+
+# ============================================================
+# 2. Loadings per factor, coloured by indicator group
+# ============================================================
+make_load_df <- function(L, model) {
+  data.frame(series  = rep(seq_len(nrow(L)), ncol(L)),
+             factor  = rep(paste("Factor", seq_len(ncol(L))), each = nrow(L)),
+             group   = rep(groups, ncol(L)),
+             loading = c(L),
+             model   = model)
+}
+load_df <- rbind(make_load_df(L_dfm, "Regular DFM"),
+                 make_load_df(L_sdfm, "Sparse DFM"))
+
+group_mid <- cumsum(group_sizes) - group_sizes / 2
+group_breaks <- cumsum(group_sizes)[-length(group_sizes)] + 0.5
+
+p_loadings <- ggplot(load_df, aes(x = series, y = loading, colour = group)) +
+  geom_vline(xintercept = group_breaks, colour = "grey85", linewidth = 0.3) +
+  geom_hline(yintercept = 0, colour = "grey50", linewidth = 0.3) +
+  geom_segment(aes(xend = series, yend = 0), linewidth = 0.5) +
+  facet_grid(factor ~ model) +
+  scale_colour_manual(values = group_cols) +
+  scale_x_continuous(breaks = group_mid, labels = names(group_sizes), expand = c(0.01, 0)) +
+  labs(title = "Factor loadings by indicator group", x = NULL, y = "Loading",
+       colour = "Indicator group") +
+  my_theme +
+  theme(panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank()) +
+  guides(colour = guide_legend(nrow = 1, override.aes = list(linewidth = 3)))
+print(p_loadings)
+
+# ============================================================
+# 3. Heatmap: sparsity pattern (white = exactly zero)
+# ============================================================
+lim <- max(abs(load_df$loading))
+
+p_heat <- ggplot(load_df, aes(x = series, y = factor, fill = loading)) +
+  geom_tile() +
+  geom_vline(xintercept = group_breaks, colour = "grey20", linewidth = 0.4) +
+  scale_fill_gradient2(low = "#2166ac", mid = "white", high = "#b2182b",
+                       midpoint = 0, limits = c(-lim, lim)) +
+  scale_x_continuous(breaks = group_mid, labels = names(group_sizes), expand = c(0, 0)) +
+  scale_y_discrete(limits = rev) +
+  facet_wrap(~ model, ncol = 1) +
+  labs(title = "Loadings heatmap (white = zero loading)", x = NULL, y = NULL,
+       fill = "Loading") +
+  my_theme +
+  theme(panel.grid = element_blank(), legend.position = "right")
+print(p_heat)
+
+# ============================================================
+# 4. Numbers for the discussion
+# ============================================================
+# Share of loadings that are exactly zero
+sparsity <- c(Regular = mean(L_dfm == 0), Sparse = mean(L_sdfm == 0))
+round(100 * sparsity, 1)   # in %
+
+# Number of NON-zero loadings per factor and group (sparse model)
+nonzero_by_group <- sapply(1:ncol(L_sdfm), function(k) tapply(L_sdfm[, k] != 0, groups, sum))
+colnames(nonzero_by_group) <- paste0("F", 1:ncol(L_sdfm))
+knitr::kable(cbind(Total = group_sizes, nonzero_by_group),
+             caption = "Sparse DFM: number of non-zero loadings per factor and indicator group")
+
+# Average absolute loading per factor and group (sparse model): which group drives each factor?
+avg_abs_by_group <- sapply(1:ncol(L_sdfm), function(k) tapply(abs(L_sdfm[, k]), groups, mean))
+colnames(avg_abs_by_group) <- paste0("F", 1:ncol(L_sdfm))
+knitr::kable(round(avg_abs_by_group, 3),
+             caption = "Sparse DFM: mean absolute loading per factor and indicator group")
+```
+
+**Answer:**
+
+## f.
+
+Implement a Monte Carlo procedure in R to generate $n_{sim} = 200$ simulated paths for the next $h = 10$ months using the fitted DFM, and compute 90% prediction intervals for each target series. Plot the median forecasts with their prediction intervals.
+
+```{r ex3f, fig.width = 11, fig.height = 9}
+set.seed(123)
+nsim <- 200
+h    <- 10
+fit  <- fit.sdfm          # change to fit.dfm to use the regular DFM
+targets <- 1:9
+target_names <- colnames(data_cc)[targets]
+
+# ---- Estimated parameters ----
+A_f   <- fit$params$A                                   # r x r transition matrix
+Su    <- fit$params$Sigma_u                             # r x r factor shock covariance
+Lam   <- fit$params$Lambda[targets, , drop = FALSE]     # 9 x r loadings of the targets
+Se    <- fit$params$Sigma_epsilon                       # idiosyncratic variances
+Se    <- if (is.matrix(Se)) diag(Se)[targets] else Se[targets]
+r     <- ncol(Lam)
+
+# The model was fitted on standardised data: keep mean/sd to convert back
+mu_x  <- if (!is.null(fit$data$X.mean)) fit$data$X.mean[targets] else rep(0, 9)
+sd_x  <- if (!is.null(fit$data$X.sd))   fit$data$X.sd[targets]   else rep(1, 9)
+
+F_last <- fit$state$factors[nrow(fit$state$factors), ]  # last estimated factor F_T
+
+# ---- Monte Carlo simulation ----
+sims_diff <- array(NA, dim = c(h, 9, nsim))             # forecasts of the differences
+
+for (s in 1:nsim) {
+  f <- F_last
+  for (k in 1:h) {
+    f     <- c(A_f %*% f) + mvrnorm(1, mu = rep(0, r), Sigma = Su)     # F_{T+k}
+    y_std <- c(Lam %*% f) + rnorm(9, mean = 0, sd = sqrt(Se))          # Y_{T+k} (standardised)
+    sims_diff[k, , s] <- mu_x + sd_x * y_std                            # back to original scale
+  }
+}
+
+# ---- From differences back to levels ----
+last_level  <- as.numeric(data_cc[nrow(data_cc), targets])
+sims_level  <- array(NA, dim = dim(sims_diff))
+for (s in 1:nsim) {
+  sims_level[, , s] <- sweep(apply(sims_diff[, , s], 2, cumsum), 2, last_level, "+")
+}
+
+# ---- Median and 90% prediction interval ----
+q <- apply(sims_level, c(1, 2), quantile, probs = c(0.05, 0.5, 0.95))   # 3 x h x 9
+
+last_date <- tail(seq(as.Date("2004-01-01"), by = "month", length.out = nrow(data_cc)), 1)
+fc_dates  <- seq(last_date, by = "month", length.out = h + 1)[-1]
+
+fc_df <- data.frame(
+  date   = rep(fc_dates, 9),
+  series = rep(target_names, each = h),
+  lower  = c(q[1, , ]),
+  median = c(q[2, , ]),
+  upper  = c(q[3, , ])
+)
+
+# Last 4 years of history for context
+n_hist <- 48
+hist_dates <- tail(seq(as.Date("2004-01-01"), by = "month", length.out = nrow(data_cc)), n_hist)
+hist_df <- data.frame(
+  date   = rep(hist_dates, 9),
+  series = rep(target_names, each = n_hist),
+  value  = c(tail(as.matrix(data_cc[, targets]), n_hist))
+)
+
+# ---- Plot ----
+p_fc <- ggplot() +
+  geom_line(data = hist_df, aes(x = date, y = value), colour = "grey30") +
+  geom_ribbon(data = fc_df, aes(x = date, ymin = lower, ymax = upper),
+              fill = "steelblue", alpha = 0.3) +
+  geom_line(data = fc_df, aes(x = date, y = median), colour = "steelblue4", linewidth = 0.8) +
+  geom_vline(xintercept = last_date, linetype = "dashed", colour = "grey50") +
+  facet_wrap(~ series, scales = "free_y", ncol = 3) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  labs(title = "DFM forecasts: median and 90% prediction interval (200 simulated paths, h = 10)",
+       x = NULL, y = "Exports (level)") +
+  theme_bw(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey90"),
+        strip.text = element_text(face = "bold", size = 9),
+        plot.title = element_text(face = "bold"))
+print(p_fc)
+
+# Table of forecasts (median and interval) for the first target, as an example
+knitr::kable(
+  data.frame(date = fc_dates, lower = q[1, , 1], median = q[2, , 1], upper = q[3, , 1]),
+  digits = 1, caption = paste("Forecast for", target_names[1])
+)
+round(avg_abs_by_group, 3)
+```
+
+## g.
+
+Interpret the factor structure and forecasts. Identify which factors capture major economic events (e.g., COVID-19 drop, 2009 recession) and which indicators contribute most to these factors.
+
+**Answer:** The four estimated factors each pick out different economic episodes, and the loadings of the sparse DFM show which indicators drive them. Factor 1 stays near zero for most of the sample, then rises steadily from 2021 and peaks sharply in 2022. It is a price factor driven mainly by producer prices: PPI has by far the largest mean absolute loading (0.083), followed by confidence indices (0.035), exchange rates (0.032) and CPI (0.024), while production indicators do not load on it at all. Its timing matches the post-COVID inflation surge and the 2022 energy price shock. Factor 2 captures the major downturns: it drops by about 8–9 standard deviations in spring 2020 (COVID-19) and also falls clearly during the 2008–09 recession. It is a real activity factor, driven by the Index of Production (0.057), business and consumer confidence (0.056) and the export targets themselves (0.037), with zero loadings on prices. Factor 3 combines consumer prices (CPI, 0.038) and production (0.029) and drifts downward in 2022. Factor 4 has only small loadings spread across CPI, the targets and Google Trends (around 0.016–0.017) and is flat apart from a single spike in early 2022, so it captures a short-lived specific shock and not a business-cycle movement. Factors 1 and 2 are nearly identical in the regular and sparse models, so the main dynamics are robust. However, the sparse DFM sets 73.5% of the loadings to exactly zero (compared with 0% in the regular DFM). This separates price and activity information into different factors, while in the regular model every indicator loads on every factor and the COVID shock spills over into several of them.
+
+The median forecasts are essentially flat: all nine export series stay close to their last observed level, with at most a slight upward drift (for example Fuels). This happens because the model works in first differences and the factors are not very persistent, so their effect fades after a few months and the forecast changes go back to their historical mean. The 90% prediction intervals widen steadily with the horizon as forecast errors add up. After 10 months they are wide (Machinery & transport ranges from about 10,000 to 16,000), so the model is informative for the next one or two months but not for longer horizons. The intervals are also probably too narrow: the simulation treats the estimated parameters and the last factor value as known and assumes normal shocks, while episodes like COVID-19 show that real shocks have much heavier tails.
